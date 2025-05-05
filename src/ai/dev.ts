@@ -1,1 +1,2 @@
-// Flows will be imported for their side effects in this file.
+import '@/ai/flows/admin-report-insights.ts';
+import '@/ai/flows/predictive-maintenance.ts';
