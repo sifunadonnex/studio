@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'; // Added SheetHeader and SheetTitle
 import { Menu, Car } from 'lucide-react';
+import { VisuallyHidden } from '@radix-ui/react-visually-hidden'; // Import VisuallyHidden
 
 export function Header() {
   const navItems = [
@@ -49,6 +50,10 @@ export function Header() {
               </Button>
             </SheetTrigger>
             <SheetContent side="right">
+               {/* Add SheetHeader and visually hidden SheetTitle for accessibility */}
+               <SheetHeader className="sr-only">
+                   <SheetTitle>Mobile Navigation Menu</SheetTitle>
+               </SheetHeader>
               <nav className="flex flex-col gap-4 mt-8">
                  <Link href="/" className="flex items-center gap-2 font-bold text-lg text-primary mb-4">
                     <Car className="h-6 w-6" />
