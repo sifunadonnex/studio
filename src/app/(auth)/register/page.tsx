@@ -1,59 +1,76 @@
-'use client';
+{'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useState } from 'react';
+import { registerUser, RegisterInput, AuthResponse } from '@/actions/auth'; // Import server action
+import { useToast } from '@/hooks/use-toast';
+
 
 export default function RegisterPage() {
+    const router = useRouter();
+    const { toast } = useToast();
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [error, setError] = useState('');
-    const [success, setSuccess] = useState('');
     const [loading, setLoading] = useState(false);
 
-    // TODO: Replace with actual PHP/MySQL registration logic via Server Action or API route
     const handleRegister = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
         setError('');
-        setSuccess('');
 
         if (password !== confirmPassword) {
             setError('Passwords do not match.');
             setLoading(false);
+             toast({
+                title: "Registration Error",
+                description: "Passwords do not match.",
+                variant: "destructive",
+            });
             return;
         }
 
-        console.log('Attempting registration with:', { name, email, password });
+        const registerData: RegisterInput = { name, email, password };
 
-        // Simulate API call
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        try {
+            const result: AuthResponse = await registerUser(registerData); // Call server action
 
-        // Placeholder logic - replace with actual registration process
-        // Check if user already exists, save user to DB, etc.
-        const userExists = false; // Simulate DB check
+            if (result.success) {
+                 toast({
+                    title: "Registration Successful!",
+                    description: result.message,
+                 });
+                 // Redirect using Next.js router
+                 router.push(result.redirectTo || '/dashboard');
+                 router.refresh(); // Refresh server components
+            } else {
+                setError(result.message);
+                toast({
+                    title: "Registration Failed",
+                    description: result.message,
+                    variant: "destructive",
+                });
+            }
 
-        if (userExists) {
-            setError('An account with this email already exists.');
-        } else {
-            setSuccess('Registration successful! You can now log in.');
-            // Optionally clear form or redirect
-             setName('');
-             setEmail('');
-             setPassword('');
-             setConfirmPassword('');
-            // Maybe redirect to login after a delay
-             setTimeout(() => {
-                 window.location.href = '/login';
-             }, 2000);
+        } catch (err) {
+             console.error("Registration page error:", err);
+             const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
+             setError(message);
+             toast({
+                title: "Error",
+                description: message,
+                variant: "destructive",
+             });
+        } finally {
+            setLoading(false);
         }
-
-        setLoading(false);
     };
 
 
@@ -76,6 +93,7 @@ export default function RegisterPage() {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     disabled={loading}
+                    autoComplete="name"
                  />
              </div>
             <div className="space-y-2">
@@ -88,6 +106,7 @@ export default function RegisterPage() {
                  value={email}
                  onChange={(e) => setEmail(e.target.value)}
                  disabled={loading}
+                 autoComplete="email"
               />
             </div>
             <div className="space-y-2">
@@ -100,6 +119,7 @@ export default function RegisterPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={loading}
+                autoComplete="new-password"
               />
             </div>
             <div className="space-y-2">
@@ -112,10 +132,10 @@ export default function RegisterPage() {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 disabled={loading}
+                autoComplete="new-password"
               />
             </div>
              {error && <p className="text-sm text-destructive">{error}</p>}
-             {success && <p className="text-sm text-green-600">{success}</p>}
             <Button type="submit" className="w-full bg-accent hover:bg-accent/90 text-accent-foreground" disabled={loading}>
                 {loading ? 'Registering...' : 'Register'}
             </Button>

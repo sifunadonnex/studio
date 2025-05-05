@@ -1,4 +1,4 @@
-'use client';
+{'use client';
 
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -7,46 +7,58 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useState } from 'react';
 import { useToast } from "@/hooks/use-toast";
+import { sendPasswordResetLink, ForgotPasswordInput, AuthResponse } from '@/actions/auth'; // Import server action
 
 export default function ForgotPasswordPage() {
   const { toast } = useToast();
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [successMessage, setSuccessMessage] = useState(''); // Use state for success message
 
-  // TODO: Implement actual password reset logic (send email via PHP/MySQL)
+
   const handleResetRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
-    setSuccess('');
+    setSuccessMessage(''); // Clear previous success message
 
-    console.log('Requesting password reset for:', email);
+    const forgotPasswordData: ForgotPasswordInput = { email };
 
-    // Simulate API call to send reset link
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    try {
+        const result: AuthResponse = await sendPasswordResetLink(forgotPasswordData); // Call server action
 
-    // Placeholder logic
-    const emailExists = true; // Simulate check
-
-    if (emailExists) {
-      setSuccess('If an account exists for this email, a password reset link has been sent.');
-      toast({
-        title: "Reset Link Sent",
-        description: "Please check your email for instructions.",
-      });
-       setEmail(''); // Clear input on success
-    } else {
-      // Avoid revealing if email exists for security
-      setSuccess('If an account exists for this email, a password reset link has been sent.');
-       toast({
-        title: "Reset Link Sent",
-        description: "Please check your email for instructions.",
-      });
+        if (result.success) {
+             setSuccessMessage(result.message); // Set success message from response
+             toast({
+                title: "Reset Link Request Processed",
+                description: result.message, // Use message from response
+             });
+            setEmail(''); // Clear input on success
+        } else {
+            // Although the server action currently always returns success=true for security,
+            // handle potential future failure scenarios or validation errors
+            setError(result.message);
+             toast({
+                title: "Request Failed",
+                description: result.message,
+                variant: "destructive",
+             });
+        }
+    } catch (err) {
+        console.error("Forgot password page error:", err);
+        const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
+        setError(message);
+        toast({
+            title: "Error",
+            description: message,
+            variant: "destructive",
+        });
+         // Still show generic message to user in case of unexpected error
+        setSuccessMessage('If an account exists for this email, a password reset link has been sent.');
+    } finally {
+        setLoading(false);
     }
-
-    setLoading(false);
   };
 
   return (
@@ -68,10 +80,11 @@ export default function ForgotPasswordPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={loading}
+                autoComplete="email"
               />
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
-            {success && <p className="text-sm text-green-600">{success}</p>}
+            {successMessage && <p className="text-sm text-green-600">{successMessage}</p>}
             <Button type="submit" className="w-full bg-primary hover:bg-primary/90" disabled={loading}>
               {loading ? 'Sending...' : 'Send Reset Link'}
             </Button>

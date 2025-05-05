@@ -1,37 +1,61 @@
-'use client';
+{'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useState } from 'react';
+import { loginUser, LoginInput, AuthResponse } from '@/actions/auth'; // Import server action
+import { useToast } from '@/hooks/use-toast';
 
 export default function LoginPage() {
+  const router = useRouter();
+  const { toast } = useToast();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // TODO: Replace with actual PHP/MySQL authentication logic via Server Action or API route
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
-    console.log('Attempting login with:', { email, password });
 
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    const loginData: LoginInput = { email, password };
 
-    // Placeholder logic - replace with actual authentication check
-    if (email === 'user@example.com' && password === 'password') {
-      // Redirect to dashboard (using Next Router or window.location)
-      console.log('Login successful! Redirecting...');
-       window.location.href = '/dashboard'; // Simple redirect for now
-    } else {
-      setError('Invalid email or password. Please try again.');
+    try {
+      const result: AuthResponse = await loginUser(loginData); // Call server action
+
+      if (result.success) {
+        toast({
+          title: 'Login Successful',
+          description: result.message,
+        });
+        // Redirect using Next.js router
+        router.push(result.redirectTo || '/dashboard');
+        router.refresh(); // Refresh server components to update session state
+      } else {
+        setError(result.message);
+        toast({
+          title: 'Login Failed',
+          description: result.message,
+          variant: 'destructive',
+        });
+      }
+    } catch (err) {
+        console.error("Login page error:", err);
+        const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
+        setError(message);
+        toast({
+          title: 'Error',
+          description: message,
+          variant: 'destructive',
+        });
+    } finally {
+         setLoading(false);
     }
-    setLoading(false);
   };
 
 
@@ -54,6 +78,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={loading}
+                autoComplete="email"
               />
             </div>
             <div className="space-y-2">
@@ -66,6 +91,7 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={loading}
+                autoComplete="current-password"
               />
             </div>
              {error && <p className="text-sm text-destructive">{error}</p>}
