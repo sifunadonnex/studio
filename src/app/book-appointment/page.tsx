@@ -1,4 +1,4 @@
-{'use client';
+'use client';
 
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
@@ -13,9 +13,9 @@ import { cn } from '@/lib/utils';
 import { CalendarIcon, User, Mail, Phone } from 'lucide-react';
 import { format } from 'date-fns';
 import { useToast } from "@/hooks/use-toast"
-// Import a (client-side) hook/utility to get session info if available
-// This is a placeholder - implement based on your session management (context, zustand, etc.)
+import { useRouter } from 'next/navigation'; // Import router for potential redirect
 import { useSession } from '@/hooks/use-session'; // Assume this hook exists
+import { bookAppointmentAction, BookAppointmentInput, BookingResponse } from '@/actions/booking'; // Import server action
 
 // Placeholder data - In a real app, fetch services and available slots from MySQL via PHP
 const availableServices = [
@@ -37,11 +37,10 @@ const availableTimeSlots = [
   '01:00 PM', '02:00 PM', '03:00 PM', '04:00 PM',
 ];
 
-// Assume a server action exists for booking
-// import { bookAppointmentAction } from '@/actions/booking'; // Placeholder
 
 export default function BookAppointmentPage() {
     const { toast } = useToast()
+    const router = useRouter(); // Initialize router
     const { session, loading: sessionLoading } = useSession(); // Use the session hook
     const [selectedService, setSelectedService] = useState<string | undefined>(undefined);
     const [date, setDate] = useState<Date | undefined>(undefined);
@@ -80,11 +79,13 @@ export default function BookAppointmentPage() {
     }, [session]);
 
 
-    // TODO: Replace with actual PHP/MySQL booking logic via Server Action or API route
     const handleBooking = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoadingBooking(true);
         setError('');
+
+        // Get user ID from session if logged in
+        const userId = session?.isLoggedIn ? session.user?.id : null;
 
         // Use details from session if logged in, otherwise from form state
         const currentName = session?.isLoggedIn ? session.user?.name : customerName;
@@ -92,69 +93,70 @@ export default function BookAppointmentPage() {
         const currentPhone = session?.isLoggedIn ? session.user?.phone : customerPhone;
 
 
-        if (!selectedService || !date || !selectedTime || !vehicleMake || !currentEmail || !currentPhone) {
-            setError('Please fill in all required fields (Service, Date, Time, Vehicle Make, Email, Phone).');
+        if (!selectedService || !date || !selectedTime || !vehicleMake || (!userId && (!currentEmail || !currentPhone))) {
+            setError('Please fill in all required fields (Service, Date, Time, Vehicle Make, and Email/Phone if not logged in).');
             setLoadingBooking(false);
              toast({ title: "Missing Information", description: "Please fill all required fields.", variant: "destructive" });
             return;
         }
 
-        const bookingData = {
-            userId: session?.isLoggedIn ? session.user?.id : null, // Include userId if logged in
+        const bookingData: BookAppointmentInput = {
+            userId: userId ?? undefined, // Pass userId or undefined
             serviceId: selectedService,
-            serviceName: availableServices.find(s => s.id === selectedService)?.name,
             date: format(date, 'yyyy-MM-dd'),
             time: selectedTime,
             vehicleMake,
-            vehicleModel,
-            vehicleYear,
-            customerName: currentName,
-            customerEmail: currentEmail,
-            customerPhone: currentPhone,
-            additionalInfo,
+            vehicleModel: vehicleModel || null, // Pass null if empty
+            vehicleYear: vehicleYear || null, // Pass null if empty
+            customerName: userId ? undefined : currentName, // Only send if not logged in
+            customerEmail: userId ? undefined : currentEmail, // Only send if not logged in
+            customerPhone: userId ? undefined : currentPhone, // Only send if not logged in
+            additionalInfo: additionalInfo || null, // Pass null if empty
         };
 
         console.log('Attempting booking with:', bookingData);
 
-        // --- Simulate API Call (Replace with Server Action) ---
-        // const result = await bookAppointmentAction(bookingData);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        const bookingSuccessful = true; // Simulate success
-        const result = { success: bookingSuccessful, message: bookingSuccessful ? `Appointment for ${bookingData.serviceName} confirmed.` : "Failed to book." };
-        // --- End Simulation ---
+        try {
+            const result: BookingResponse = await bookAppointmentAction(bookingData); // Call Server Action
 
-
-        if (result.success) {
-             toast({
-                 title: "Booking Successful!",
-                 description: `Your appointment for ${bookingData.serviceName} on ${bookingData.date} at ${bookingData.time} is confirmed.`,
-                 variant: "default",
-             })
-            // Clear form or redirect
-             setSelectedService(undefined);
-             setDate(undefined);
-             setSelectedTime(undefined);
-             setVehicleMake('');
-             setVehicleModel('');
-             setVehicleYear('');
-             setAdditionalInfo('');
-             // Don't clear name/email/phone if logged in
-             if (!session?.isLoggedIn) {
-                setCustomerName('');
-                setCustomerEmail('');
-                setCustomerPhone('');
-             }
-             // Optionally redirect: router.push('/appointments');
-        } else {
-            setError(result.message || 'Failed to book appointment. Please try again later.');
-             toast({
-                 title: "Booking Failed",
-                 description: result.message || "Could not schedule your appointment. Please try again.",
-                 variant: "destructive",
-             })
+            if (result.success) {
+                 toast({
+                     title: "Booking Successful!",
+                     description: `Your appointment for ${availableServices.find(s => s.id === selectedService)?.name} on ${bookingData.date} at ${bookingData.time} is confirmed. Appointment ID: ${result.appointmentId}`,
+                     variant: "default",
+                 })
+                // Clear form or redirect
+                 setSelectedService(undefined);
+                 setDate(undefined);
+                 setSelectedTime(undefined);
+                 setVehicleMake('');
+                 setVehicleModel('');
+                 setVehicleYear('');
+                 setAdditionalInfo('');
+                 // Don't clear name/email/phone if logged in
+                 if (!userId) {
+                    setCustomerName('');
+                    setCustomerEmail('');
+                    setCustomerPhone('');
+                 }
+                 // Redirect to appointments page after successful booking
+                  router.push('/appointments');
+            } else {
+                setError(result.message || 'Failed to book appointment. Please try again later.');
+                 toast({
+                     title: "Booking Failed",
+                     description: result.message || "Could not schedule your appointment. Please try again.",
+                     variant: "destructive",
+                 })
+            }
+        } catch (err) {
+             console.error("Booking error:", err);
+             const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
+             setError(message);
+             toast({ title: "Error", description: message, variant: "destructive" });
+        } finally {
+            setLoadingBooking(false);
         }
-
-        setLoadingBooking(false);
     };
 
     const isLoading = loadingBooking || sessionLoading;
@@ -251,58 +253,57 @@ export default function BookAppointmentPage() {
              </fieldset>
 
 
-             {/* Customer Information - Conditionally disable if logged in */}
-              <fieldset className="space-y-4 border p-4 rounded-md">
-                 <legend className="text-sm font-medium px-1">Contact Information</legend>
-                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                     <div className="space-y-2 relative">
-                        <Label htmlFor="name">Your Name</Label>
-                         <User className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground"/>
-                        <Input
-                             id="name"
-                             placeholder="Full Name"
-                             value={customerName}
-                             onChange={(e) => setCustomerName(e.target.value)}
-                             disabled={isLoading || session?.isLoggedIn} // Disable if logged in
-                             className="pl-8"
-                             autoComplete="name"
-                         />
+             {/* Customer Information - Show only if NOT logged in */}
+             {!session?.isLoggedIn && !sessionLoading && ( // Also check sessionLoading to avoid flicker
+                  <fieldset className="space-y-4 border p-4 rounded-md">
+                     <legend className="text-sm font-medium px-1">Contact Information</legend>
+                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                         <div className="space-y-2 relative">
+                            <Label htmlFor="name">Your Name</Label>
+                             <User className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground"/>
+                            <Input
+                                 id="name"
+                                 placeholder="Full Name"
+                                 value={customerName}
+                                 onChange={(e) => setCustomerName(e.target.value)}
+                                 disabled={isLoading}
+                                 className="pl-8"
+                                 autoComplete="name"
+                             />
+                         </div>
+                         <div className="space-y-2 relative">
+                            <Label htmlFor="email">Email <span className="text-destructive">*</span></Label>
+                            <Mail className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground"/>
+                            <Input
+                                 id="email"
+                                 type="email"
+                                 placeholder="you@example.com"
+                                 required
+                                 value={customerEmail}
+                                 onChange={(e) => setCustomerEmail(e.target.value)}
+                                 disabled={isLoading}
+                                 className="pl-8"
+                                 autoComplete="email"
+                             />
+                         </div>
                      </div>
                      <div className="space-y-2 relative">
-                        <Label htmlFor="email">Email <span className="text-destructive">*</span></Label>
-                        <Mail className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground"/>
+                        <Label htmlFor="phone">Phone Number <span className="text-destructive">*</span></Label>
+                        <Phone className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground"/>
                         <Input
-                             id="email"
-                             type="email"
-                             placeholder="you@example.com"
-                             required
-                             value={customerEmail}
-                             onChange={(e) => setCustomerEmail(e.target.value)}
-                             disabled={isLoading || session?.isLoggedIn} // Disable if logged in
-                             className="pl-8"
-                             autoComplete="email"
+                            id="phone"
+                            type="tel"
+                            placeholder="+254 7XX XXX XXX"
+                            required
+                            value={customerPhone}
+                            onChange={(e) => setCustomerPhone(e.target.value)}
+                            disabled={isLoading}
+                            className="pl-8"
+                            autoComplete="tel"
                          />
                      </div>
-                 </div>
-                 <div className="space-y-2 relative">
-                    <Label htmlFor="phone">Phone Number <span className="text-destructive">*</span></Label>
-                    <Phone className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground"/>
-                    <Input
-                        id="phone"
-                        type="tel"
-                        placeholder="+254 7XX XXX XXX"
-                        required
-                        value={customerPhone}
-                        onChange={(e) => setCustomerPhone(e.target.value)}
-                        disabled={isLoading || session?.isLoggedIn} // Disable if logged in
-                        className="pl-8"
-                        autoComplete="tel"
-                     />
-                 </div>
-                 {session?.isLoggedIn && (
-                    <p className="text-xs text-muted-foreground">Your contact details are pre-filled from your profile.</p>
-                 )}
-             </fieldset>
+                 </fieldset>
+             )}
 
              {/* Additional Information */}
               <div className="space-y-2">
