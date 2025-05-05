@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Wrench, Oil, Car, BatteryCharging, Thermometer, Settings, Wind, ShieldCheck } from 'lucide-react';
+import { Wrench, Droplet, Car, BatteryCharging, Thermometer, Settings, Wind, ShieldCheck } from 'lucide-react'; // Replaced Oil with Droplet
 import Link from 'next/link';
 
 // Placeholder data - In a real app, fetch this from MySQL via PHP API/Server Action
@@ -10,14 +10,14 @@ const services = [
     title: 'Standard Oil Change',
     description: 'Includes up to 5 quarts of conventional oil, new oil filter, and lubrication of chassis components.',
     price: 'KES 3,500',
-    icon: Oil,
+    icon: Droplet, // Updated icon usage
   },
   {
     id: 2,
     title: 'Synthetic Oil Change',
     description: 'Includes up to 5 quarts of full synthetic oil, new premium oil filter, and chassis lubrication.',
     price: 'KES 6,000',
-    icon: Oil,
+    icon: Droplet, // Updated icon usage
   },
   {
     id: 3,
