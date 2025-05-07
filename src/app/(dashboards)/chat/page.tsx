@@ -1,11 +1,11 @@
-'use client';
+{'use client';
 
 import { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Send, User, Tool } from 'lucide-react';
+import { Send, User, Wrench } from 'lucide-react'; // Changed Tool to Wrench
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
@@ -120,7 +120,7 @@ export default function ChatPage() {
                    {message.sender === 'staff' && (
                      <Avatar className="h-8 w-8">
                         {/* Placeholder for staff image */}
-                       <AvatarFallback><Tool className="h-4 w-4" /></AvatarFallback>
+                       <AvatarFallback><Wrench className="h-4 w-4" /></AvatarFallback> {/* Changed Tool to Wrench */}
                     </Avatar>
                    )}
                   <div
