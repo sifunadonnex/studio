@@ -52,7 +52,7 @@ export interface AuthResponse {
 // --- Helper to set session cookie ---
 // UserProfile passed here should have string dates if they are part of it.
 // Currently, cookie only stores id, name, email, role, phone.
-async function setSessionCookie(userData: UserProfile) {
+export async function setSessionCookie(userData: UserProfile) {
     const sessionData = {
         userId: userData.id, 
         name: userData.name,
@@ -268,7 +268,6 @@ export async function logoutUser(): Promise<{ success: boolean }> {
  * createdAt and updatedAt are not stored in the cookie, so they will be undefined here.
  */
 export async function getUserSession(): Promise<UserProfile | null> {
-    // The error message "cookies() should be awaited" implies cookies() might be async here.
     const cookieStore = await cookies(); 
     const sessionCookie = cookieStore.get('session');
     
@@ -294,7 +293,7 @@ export async function getUserSession(): Promise<UserProfile | null> {
     } catch (error) {
         console.error('Error parsing session cookie:', error);
         // Clear potentially corrupted cookie
-        const storeForDelete = cookies(); // Re-get for delete, as it might be a new instance contextually
+        const storeForDelete = cookies(); 
         storeForDelete.delete('session'); 
         return null;
     }
