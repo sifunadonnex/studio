@@ -1,10 +1,9 @@
-
 'use server';
 
 import { z } from 'zod';
 import { getUserSession, UserProfile } from '@/actions/auth'; // To verify user
 import { db, auth as firebaseAuthInstance } from '@/lib/firebase/config'; // Firebase db
-import { doc, updateDoc, setDoc, deleteDoc, getDocs, collection, query, where, serverTimestamp, getDoc } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, deleteDoc, getDocs, collection, query, where, serverTimestamp, getDoc, Timestamp } from 'firebase/firestore';
 import { updatePassword as firebaseUpdatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth'; // For password change
 
 // --- Schemas ---
@@ -26,7 +25,7 @@ const VehicleSchema = z.object({
     nickname: z.string().min(1, { message: 'Nickname is required.'}),
     serviceHistory: z.string().optional().describe(
       'A string containing the service history of the vehicle, including dates and services performed.'
-    ), // Added serviceHistory
+    ), 
 });
 
 // --- Types ---
@@ -50,7 +49,7 @@ export interface VehicleResponse extends ProfileResponse {
  */
 export async function updateProfileAction(data: UpdateProfileInput): Promise<ProfileResponse> {
     const session = await getUserSession();
-    if (!session?.id) { // Check for session.id (Firebase UID)
+    if (!session?.id) { 
         return { success: false, message: "Authentication required." };
     }
 
@@ -61,13 +60,9 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Pro
         const userDocRef = doc(db, 'users', session.id);
         await updateDoc(userDocRef, {
             name: validatedData.name,
-            phone: validatedData.phone || null, // Store null if undefined
+            phone: validatedData.phone || null, 
             updatedAt: serverTimestamp(),
         });
-
-        // Optional: Update session cookie if name/phone is stored there and changed
-        // For simplicity, client can refresh session or rely on next fetch after update
-        // If you need to update cookie, re-fetch profile & call setSessionCookie (from auth.ts - not exported directly)
 
         return { success: true, message: "Profile updated successfully." };
 
@@ -85,7 +80,6 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Pro
  * Simulates changing a user's password.
  * IMPORTANT: Real Firebase password changes on the server require Firebase Admin SDK for security
  * or re-authentication of the user. Client-side SDK `updatePassword` is preferred for direct user changes.
- * This action simulates the process but a full server-side implementation is complex without Admin SDK.
  */
 export async function changePasswordAction(data: ChangePasswordInput): Promise<ProfileResponse> {
      const session = await getUserSession();
@@ -96,25 +90,16 @@ export async function changePasswordAction(data: ChangePasswordInput): Promise<P
      try {
          const validatedData = ChangePasswordSchema.parse(data);
          console.log(`Server Action (changePassword): Attempting password change for user ${session.id}`);
-
-         // --- Firebase Password Change (Conceptual - Requires Admin SDK or Client-Side Re-auth) ---
-         // To do this securely on the server *without* Admin SDK, you'd need to:
-         // 1. Get the current Firebase user instance (not directly available in server actions like this).
-         // 2. Re-authenticate the user: `reauthenticateWithCredential(currentUser, EmailAuthProvider.credential(session.email, validatedData.currentPassword))`
-         // 3. If re-authentication is successful, then: `firebaseUpdatePassword(currentUser, validatedData.newPassword)`
-         // This is complex in a server action environment as `firebaseAuthInstance.currentUser` is client-side.
-         // A Firebase Admin SDK approach `admin.auth().updateUser(uid, { password: newPassword })` is cleaner for server-side.
-
-         // Simulation:
-         // We'll simulate checking the current password against a dummy value for now.
-         // In a real app, this step is critical and involves Firebase's re-authentication.
+         
+         // This is a simulation. Real Firebase password change requires re-authentication or Admin SDK.
+         // For this example, we assume a simplified check.
+         // IMPORTANT: Do not use this simulated password check in production.
          if (validatedData.currentPassword !== "password") { // DUMMY CHECK - REPLACE
              console.warn(`Server Action (changePassword): Simulated incorrect current password for user ${session.id}`);
              return { success: false, message: "Incorrect current password. (Simulation)" };
          }
          
          console.log(`Server Action (changePassword): Simulating password update for user ${session.id}. Real implementation needs Firebase Admin SDK or client-side re-auth flow.`);
-         // --- End Simulation ---
          
          return { success: true, message: "Password changed successfully. (Simulation)" };
 
@@ -156,8 +141,10 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
         let vehicleId = validatedVehicle.id;
 
         if (input.action === 'add') {
-            const newVehicleDocRef = doc(vehiclesCollectionRef); // Auto-generate ID
+            const newVehicleDocRef = doc(vehiclesCollectionRef); 
             vehicleId = newVehicleDocRef.id;
+            // Note: VehicleSchema doesn't include createdAt/updatedAt, so they are not in validatedVehicle.
+            // Firestore will store them as Timestamps.
             await setDoc(newVehicleDocRef, { ...validatedVehicle, id: vehicleId, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
             console.log(`Firestore: Added vehicle ${vehicleId} for user ${userId}`);
         } else if (input.action === 'update') {
@@ -174,8 +161,11 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
             return { success: false, message: "Invalid vehicle action specified." };
         }
 
-        // Fetch and return the updated list of vehicles
         const updatedVehiclesSnap = await getDocs(vehiclesCollectionRef);
+        // VehicleInput from Zod schema doesn't have createdAt/updatedAt.
+        // If doc.data() contains Timestamps for these, they will be stripped by `as VehicleInput`
+        // or if VehicleInput was `any`, they would pass as Timestamps causing issues if passed to client.
+        // For now, assuming Zod strictness handles this for VehicleInput.
         const updatedVehicles = updatedVehiclesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as VehicleInput));
 
         return {
@@ -208,6 +198,7 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
      try {
          const vehiclesCollectionRef = collection(db, 'users', userId, 'vehicles');
          const vehiclesSnap = await getDocs(vehiclesCollectionRef);
+         // As above, assuming VehicleInput is strict and doesn't pass through Timestamps.
          const vehicles = vehiclesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as VehicleInput));
 
          return { success: true, message: "Vehicles fetched successfully.", vehicles };
@@ -219,7 +210,7 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
  }
 
  /**
- * Fetches a single user profile from Firestore.
+ * Fetches a single user profile from Firestore and serializes Timestamps.
  */
 export async function fetchUserProfile(userId: string): Promise<UserProfile | null> {
     if (!userId) return null;
@@ -227,7 +218,20 @@ export async function fetchUserProfile(userId: string): Promise<UserProfile | nu
         const userDocRef = doc(db, 'users', userId);
         const userDocSnap = await getDoc(userDocRef);
         if (userDocSnap.exists()) {
-            return { id: userDocSnap.id, ...userDocSnap.data() } as UserProfile;
+            const data = userDocSnap.data();
+            // Serialize Timestamps to ISO strings
+            const createdAt = data.createdAt instanceof Timestamp ? data.createdAt.toDate().toISOString() : undefined;
+            const updatedAt = data.updatedAt instanceof Timestamp ? data.updatedAt.toDate().toISOString() : undefined;
+
+            return { 
+                id: userDocSnap.id, 
+                name: data.name,
+                email: data.email,
+                role: data.role,
+                phone: data.phone,
+                createdAt,
+                updatedAt,
+            } as UserProfile;
         }
         return null;
     } catch (error) {

@@ -1,4 +1,3 @@
-
 'use server';
 
 import { z } from 'zod';
@@ -10,7 +9,7 @@ import {
   sendPasswordResetEmail,
   signOut as firebaseSignOut
 } from 'firebase/auth';
-import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
 
 // --- Schemas ---
 const LoginSchema = z.object({
@@ -39,8 +38,8 @@ export interface UserProfile {
     email: string;
     role: 'customer' | 'staff' | 'admin';
     phone?: string;
-    createdAt?: any; // Firestore Timestamp
-    updatedAt?: any; // Firestore Timestamp
+    createdAt?: string; // Changed from any/Timestamp to string
+    updatedAt?: string; // Changed from any/Timestamp to string
 }
 
 export interface AuthResponse {
@@ -51,9 +50,11 @@ export interface AuthResponse {
 }
 
 // --- Helper to set session cookie ---
+// UserProfile passed here should have string dates if they are part of it.
+// Currently, cookie only stores id, name, email, role, phone.
 async function setSessionCookie(userData: UserProfile) {
     const sessionData = {
-        userId: userData.id, // Firebase UID
+        userId: userData.id, 
         name: userData.name,
         email: userData.email,
         role: userData.role,
@@ -85,32 +86,35 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
     const firebaseUser = userCredential.user;
 
     if (firebaseUser) {
-        // Fetch user profile from Firestore
         const userDocRef = doc(db, 'users', firebaseUser.uid);
         const userDocSnap = await getDoc(userDocRef);
 
         if (userDocSnap.exists()) {
-            const userProfile = userDocSnap.data() as UserProfile;
-            userProfile.id = firebaseUser.uid; // Ensure ID is set
+            const firestoreData = userDocSnap.data();
+            const userProfile: UserProfile = {
+                id: firebaseUser.uid,
+                name: firestoreData.name,
+                email: firestoreData.email,
+                role: firestoreData.role,
+                phone: firestoreData.phone,
+                createdAt: (firestoreData.createdAt as Timestamp)?.toDate().toISOString(), // Serialize
+                updatedAt: (firestoreData.updatedAt as Timestamp)?.toDate().toISOString(), // Serialize
+            };
 
-            await setSessionCookie(userProfile);
+            await setSessionCookie(userProfile); // userProfile has serialized dates
             console.log('Server Action: Firebase Login successful, session set for:', userProfile.email);
             return {
                 success: true,
                 message: 'Login successful!',
-                user: userProfile,
-                redirectTo: userProfile.role === 'admin' ? '/admin/reports' : '/dashboard', // Adjust redirect based on role
+                user: userProfile, // userProfile has serialized dates
+                redirectTo: userProfile.role === 'admin' ? '/admin/reports' : '/dashboard',
             };
         } else {
-             // This case should ideally not happen if user registered correctly
-             // Optionally, create a profile if it's missing for an existing auth user
             console.error('Server Action: Firestore profile not found for user:', firebaseUser.uid);
-             // For now, treat as error
-            await firebaseSignOut(auth); // Sign out the Firebase user
+            await firebaseSignOut(auth); 
             return { success: false, message: 'User profile not found. Please contact support.' };
         }
     } else {
-      // Should not happen if signInWithEmailAndPassword resolves
       return { success: false, message: 'Firebase login failed unexpectedly.' };
     }
   } catch (error: any) {
@@ -119,7 +123,6 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
       return { success: false, message: `Validation failed: ${messages}` };
     }
     console.error('Server Action Error (loginUser Firebase):', error);
-    // Map Firebase auth errors to user-friendly messages
     let message = 'An unexpected error occurred during login.';
     if (error.code) {
         switch (error.code) {
@@ -152,23 +155,35 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
         const firebaseUser = userCredential.user;
 
         if (firebaseUser) {
-            // Create user profile in Firestore
-            const newUserProfile: UserProfile = {
-                id: firebaseUser.uid,
+            const now = new Date();
+            // Data for Firestore document (uses serverTimestamp)
+            const firestoreDocumentData = {
                 name: validatedData.name,
                 email: firebaseUser.email!,
-                role: 'customer', // Default role
+                role: 'customer' as 'customer' | 'staff' | 'admin',
+                phone: undefined, // Default or handle as needed
                 createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp(),
             };
-            await setDoc(doc(db, 'users', firebaseUser.uid), newUserProfile);
+            await setDoc(doc(db, 'users', firebaseUser.uid), firestoreDocumentData);
 
-            await setSessionCookie(newUserProfile);
-            console.log('Server Action: Firebase Registration successful, session set for:', newUserProfile.email);
+            // UserProfile object for session cookie and response (with serialized dates)
+            const userProfileForSession: UserProfile = {
+                id: firebaseUser.uid,
+                name: validatedData.name,
+                email: firebaseUser.email!,
+                role: 'customer',
+                phone: undefined,
+                createdAt: now.toISOString(), // Serialize
+                updatedAt: now.toISOString(), // Serialize
+            };
+
+            await setSessionCookie(userProfileForSession);
+            console.log('Server Action: Firebase Registration successful, session set for:', userProfileForSession.email);
             return {
                  success: true,
                  message: 'Registration successful! Welcome!',
-                 user: newUserProfile,
+                 user: userProfileForSession, // userProfileForSession has serialized dates
                  redirectTo: '/dashboard',
             };
         } else {
@@ -211,7 +226,6 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
         await sendPasswordResetEmail(auth, validatedData.email);
         
         console.log('Server Action: Firebase password reset link request processed for:', validatedData.email);
-        // Always return a generic success message for security
         return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
 
     } catch (error: any) {
@@ -220,7 +234,6 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
             return { success: false, message: `Validation failed: ${messages}` };
         }
         console.error('Server Action Error (sendPasswordResetLink Firebase):', error);
-        // Still return generic success to avoid leaking info, but log specific errors
         if (error.code === 'auth/invalid-email') {
              return { success: false, message: 'Invalid email format.' };
         }
@@ -234,13 +247,6 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
 export async function logoutUser(): Promise<{ success: boolean }> {
     try {
         console.log('Server Action: Logging out user (Firebase and cookie)');
-        // Firebase sign out is client-side, but for server actions context, we mainly clear our cookie.
-        // If Firebase client SDK was used for login, it should also sign out there.
-        // Here, we primarily ensure our app's session state is cleared.
-        // await firebaseSignOut(auth); // This would error if auth state not available server-side like this.
-                                 // Actual Firebase logout typically happens on the client.
-                                 // The cookie deletion effectively ends the server-recognized session.
-
         cookies().delete('session');
         return { success: true };
     } catch (error) {
@@ -252,6 +258,7 @@ export async function logoutUser(): Promise<{ success: boolean }> {
 /**
  * Retrieves the current user session from the cookie.
  * This data is derived from Firebase user info after login/registration.
+ * createdAt and updatedAt are not stored in the cookie, so they will be undefined here.
  */
 export async function getUserSession(): Promise<UserProfile | null> {
     const sessionCookie = cookies().get('session');
@@ -261,21 +268,20 @@ export async function getUserSession(): Promise<UserProfile | null> {
 
     try {
         const sessionData = JSON.parse(sessionCookie.value);
-        // Basic validation of session data structure
         if (sessionData && sessionData.userId && sessionData.email && sessionData.role) {
-             // The 'id' field in UserProfile corresponds to 'userId' in cookie
             return { 
                 id: sessionData.userId, 
                 name: sessionData.name, 
                 email: sessionData.email, 
                 role: sessionData.role,
-                phone: sessionData.phone 
+                phone: sessionData.phone,
+                // createdAt & updatedAt will be undefined here, which is fine for UserProfile type.
             } as UserProfile;
         }
         return null;
     } catch (error) {
         console.error('Error parsing session cookie:', error);
-        cookies().delete('session'); // Clear invalid cookie
+        cookies().delete('session'); 
         return null;
     }
 }
