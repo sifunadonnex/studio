@@ -1,202 +1,127 @@
+
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-
-interface UserInfo {
-    id: string;
-    name: string;
-    email: string;
-    role: 'customer' | 'staff' | 'admin';
-    phone?: string; // Add optional phone number
-}
-
-interface SessionState {
-    isLoggedIn: boolean;
-    user: UserInfo | null;
-}
-
-interface UseSessionReturn {
-    session: SessionState | null;
-    loading: boolean;
-    refreshSession: () => void; // Function to manually re-check session
-}
-
-/**
- * Client-side hook to check for the presence and basic validity of the session cookie.
- * **Note:** This hook ONLY checks if the cookie exists on the client.
- * It DOES NOT guarantee the session is still valid on the server.
- * For critical actions or loading sensitive data, always re-validate the session
- * on the server (e.g., in Server Components, Route Handlers, or Server Actions).
- *
- * @returns An object containing the session state (`isLoggedIn`, `user` details if found), a loading indicator, and a refresh function.
- */
-export function useSession(): UseSessionReturn {
-    const [session, setSession] = useState<SessionState | null>(null);
-    const [loading, setLoading] = useState(true);
-
-    const checkSession = useCallback(() => {
-        // console.log("useSession: Checking session..."); // Debug log
-        setLoading(true);
-        try {
-            const sessionCookie = document.cookie
-                .split('; ')
-                .find((row) => row.startsWith('session='));
-
-            if (sessionCookie) {
-                const cookieValue = sessionCookie.split('=')[1];
-                if (cookieValue) {
-                    const decodedValue = decodeURIComponent(cookieValue);
-                    const parsedSession: Partial<UserInfo & { userId: string, loggedInAt: number }> = JSON.parse(decodedValue);
-                    // console.log("useSession: Parsed cookie data:", parsedSession); // Debug log
-
-                    // Basic validation: check for essential fields
-                    if (parsedSession.userId && parsedSession.email && parsedSession.role && parsedSession.loggedInAt) {
-                         // Optional: Check if loggedInAt is reasonably recent? (Simple client-side expiry check)
-                         // const maxAge = 7 * 24 * 60 * 60 * 1000; // 1 week in ms
-                         // if (Date.now() - parsedSession.loggedInAt > maxAge) {
-                         //    console.log("useSession: Session cookie expired based on loggedInAt.");
-                         //    setSession({ isLoggedIn: false, user: null });
-                         //    document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;'; // Clear expired cookie
-                         // } else {
-
-                            const userInfo: UserInfo = {
-                                id: parsedSession.userId,
-                                name: parsedSession.name || 'User',
-                                email: parsedSession.email,
-                                role: parsedSession.role,
-                                phone: parsedSession.phone || undefined, // Include phone if present
-                            };
-                            // console.log("useSession: Session valid, user:", userInfo); // Debug log
-                            setSession({ isLoggedIn: true, user: userInfo });
-                         // }
-                    } else {
-                        // Cookie exists but is malformed or missing data
-                        console.warn('useSession: Session cookie found but malformed or missing required fields.');
-                        setSession({ isLoggedIn: false, user: null });
-                         // Clear the malformed cookie
-                         document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
-                    }
-                } else {
-                     // Cookie exists but has no value
-                      console.log("useSession: Session cookie found but has no value.");
-                     setSession({ isLoggedIn: false, user: null });
-                     document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;'; // Clear empty cookie
-                }
-            } else {
-                // No session cookie found
-                // console.log("useSession: No session cookie found.");
-                setSession({ isLoggedIn: false, user: null });
-            }
-        } catch (error) {
-            console.error("useSession: Error parsing session cookie:", error);
-            setSession({ isLoggedIn: false, user: null });
-             // Clear the invalid cookie
-             document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
-        } finally {
-            setLoading(false);
-             // console.log("useSession: Check finished, loading set to false."); // Debug log
-        }
-    }, []); // useCallback dependency array is empty as it doesn't depend on external state/props
-
-    useEffect(() => {
-        checkSession(); // Check on initial mount
-
-         // Re-check session when window gains focus (e.g., user switches back to the tab)
-         // This helps catch logout events from other tabs more quickly.
-         window.addEventListener('focus', checkSession);
-
-         // Clean up listener on unmount
-         return () => {
-             window.removeEventListener('focus', checkSession);
-         };
-
-    }, [checkSession]); // Re-run effect if checkSession function identity changes (shouldn't with useCallback)
-
-    return { session, loading, refreshSession: checkSession };
-}]]></content>
-  </change>
-   <change>
-    <file>src/app/(dashboards)/profile/page.tsx</file>
-    <description>Convert profile page to use `useSession` hook for user data and implement update actions (simulation).</description>
-    <content><![CDATA{'use client';
-
-import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { User, Mail, Phone, Car, Lock } from "lucide-react";
+import { User, Mail, Phone, Car, Lock, PlusCircle, Edit3, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useSession } from '@/hooks/use-session'; // Import session hook
-import { Skeleton } from '@/components/ui/skeleton'; // Import Skeleton
+import { useSession, UserInfo } from '@/hooks/use-session'; 
+import { Skeleton } from '@/components/ui/skeleton';
+import { 
+    updateProfileAction, 
+    changePasswordAction, 
+    manageVehicleAction, 
+    fetchVehiclesAction,
+    UpdateProfileInput,
+    ChangePasswordInput,
+    VehicleInput,
+    ProfileResponse,
+    VehicleResponse
+} from '@/actions/profile'; 
+import Link from 'next/link'; // For login redirect link
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogClose,
+} from "@/components/ui/dialog"
 
-// Placeholder: Assume server actions exist for updates
-// import { updateProfileAction, changePasswordAction, manageVehicleAction } from '@/actions/profile';
-
-// Mock data for vehicles until fetched
-const mockUserVehicles = [
-   { id: 'V1', make: 'Toyota', model: 'Corolla', year: '2018', nickname: 'My Sedan' },
-   { id: 'V2', make: 'Nissan', model: 'X-Trail', year: '2020', nickname: 'Family SUV' },
-];
 
 export default function ProfilePage() {
     const { toast } = useToast();
     const { session, loading: sessionLoading, refreshSession } = useSession();
-    const [vehicles, setVehicles] = useState(mockUserVehicles); // TODO: Fetch user vehicles
+    
+    const [vehicles, setVehicles] = useState<VehicleInput[]>([]); 
 
-    // Form state for profile update
     const [name, setName] = useState('');
     const [phone, setPhone] = useState('');
-    const [email, setEmail] = useState(''); // Email display only
+    const [email, setEmail] = useState(''); 
 
-    // Form state for password change
     const [currentPassword, setCurrentPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
-    // Loading and error states
     const [loadingProfile, setLoadingProfile] = useState(false);
     const [loadingPassword, setLoadingPassword] = useState(false);
-    const [loadingVehicles, setLoadingVehicles] = useState(false); // Add loading state for vehicles
+    const [loadingVehicles, setLoadingVehicles] = useState(true);
     const [profileError, setProfileError] = useState('');
     const [passwordError, setPasswordError] = useState('');
 
-    // Populate form fields when session data loads
+    // State for Add/Edit Vehicle Dialog
+    const [isVehicleDialogOpen, setIsVehicleDialogOpen] = useState(false);
+    const [editingVehicle, setEditingVehicle] = useState<VehicleInput | null>(null);
+    const [vehicleForm, setVehicleForm] = useState<Omit<VehicleInput, 'id'>>({ make: '', model: '', year: '', nickname: '', serviceHistory: '' });
+
+
+    // Fetch vehicles and populate form fields when session data loads
     useEffect(() => {
         if (session?.isLoggedIn && session.user) {
             setName(session.user.name || '');
-            setEmail(session.user.email || ''); // Email is usually not editable
+            setEmail(session.user.email || '');
             setPhone(session.user.phone || '');
+            fetchUserVehicles();
+        } else if (!sessionLoading && !session?.isLoggedIn) {
+            // If session is loaded and user is not logged in, stop vehicle loading.
+            setLoadingVehicles(false);
         }
-    }, [session]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [session, sessionLoading]);
 
-    // --- Action Handlers (Simulated) ---
+    const fetchUserVehicles = useCallback(async () => {
+        if (!session?.isLoggedIn) return;
+        setLoadingVehicles(true);
+        try {
+            const result: VehicleResponse = await fetchVehiclesAction();
+            if (result.success && result.vehicles) {
+                setVehicles(result.vehicles);
+            } else {
+                toast({ title: "Error Fetching Vehicles", description: result.message, variant: "destructive" });
+            }
+        } catch (error) {
+            toast({ title: "Error", description: "Could not fetch vehicles.", variant: "destructive" });
+        } finally {
+            setLoadingVehicles(false);
+        }
+    }, [session?.isLoggedIn, toast]);
+
 
     const handleUpdateProfile = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!session?.isLoggedIn) return; // Should not happen if page is protected
+        if (!session?.isLoggedIn || !session.user) return;
 
         setLoadingProfile(true);
         setProfileError('');
-        console.log("Updating profile:", { userId: session.user?.id, name, phone });
+        
+        const profileData: UpdateProfileInput = { name, phone: phone || undefined };
 
         try {
-            // --- Simulate Server Action Call ---
-            // const result = await updateProfileAction({ userId: session.user.id, name, phone });
-            await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API
-            const success = true; // Simulate success
-            const result = { success, message: success ? "Profile updated successfully." : "Failed to update profile." };
-            // --- End Simulation ---
-
+            const result: ProfileResponse = await updateProfileAction(profileData);
             if (result.success) {
                 toast({ title: "Profile Updated", description: result.message });
-                refreshSession(); // Refresh session data to reflect changes potentially stored in cookie
+                refreshSession(); 
             } else {
-                setProfileError(result.message || "Failed to update profile. Please try again.");
+                setProfileError(result.message || "Failed to update profile.");
                 toast({ title: "Update Failed", description: result.message, variant: "destructive" });
             }
         } catch (error) {
-             console.error("Profile update error:", error);
              const message = error instanceof Error ? error.message : "An unexpected error occurred.";
              setProfileError(message);
              toast({ title: "Update Error", description: message, variant: "destructive" });
@@ -207,41 +132,28 @@ export default function ProfilePage() {
 
     const handleChangePassword = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!session?.isLoggedIn) return;
+        if (!session?.isLoggedIn || !session.user) return;
 
         setPasswordError('');
         if (newPassword !== confirmNewPassword) {
-            setPasswordError("New passwords do not match.");
-            return;
+            setPasswordError("New passwords do not match."); return;
         }
         if (!currentPassword || !newPassword || newPassword.length < 6) {
-            setPasswordError("Please provide current password and a new password (min. 6 characters).");
-            return;
+            setPasswordError("Provide current password and a new password (min. 6 characters)."); return;
         }
 
         setLoadingPassword(true);
-        console.log("Changing password for user:", session.user?.id);
-
+        const passwordData: ChangePasswordInput = { currentPassword, newPassword };
         try {
-            // --- Simulate Server Action Call ---
-             // const result = await changePasswordAction({ userId: session.user.id, currentPassword, newPassword });
-             await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate API
-             // Simulate success (real action would validate currentPassword)
-             const success = currentPassword === 'password'; // Basic simulation
-             const result = { success, message: success ? "Password changed successfully." : "Incorrect current password." };
-             // --- End Simulation ---
-
+            const result: ProfileResponse = await changePasswordAction(passwordData);
             if (result.success) {
                 toast({ title: "Password Changed", description: result.message });
-                setCurrentPassword('');
-                setNewPassword('');
-                setConfirmNewPassword('');
+                setCurrentPassword(''); setNewPassword(''); setConfirmNewPassword('');
             } else {
                 setPasswordError(result.message || "Failed to change password.");
                 toast({ title: "Password Change Failed", description: result.message, variant: "destructive" });
             }
         } catch (error) {
-             console.error("Password change error:", error);
              const message = error instanceof Error ? error.message : "An unexpected error occurred.";
              setPasswordError(message);
              toast({ title: "Password Change Error", description: message, variant: "destructive" });
@@ -249,44 +161,80 @@ export default function ProfilePage() {
             setLoadingPassword(false);
         }
     };
+    
+    const openVehicleDialog = (vehicle: VehicleInput | null = null) => {
+        if (vehicle) {
+            setEditingVehicle(vehicle);
+            setVehicleForm({ make: vehicle.make, model: vehicle.model, year: vehicle.year, nickname: vehicle.nickname, serviceHistory: vehicle.serviceHistory || '' });
+        } else {
+            setEditingVehicle(null);
+            setVehicleForm({ make: '', model: '', year: '', nickname: '', serviceHistory: '' });
+        }
+        setIsVehicleDialogOpen(true);
+    };
 
-     // TODO: Implement vehicle management functions (add, edit, delete) using server actions
-     const handleAddVehicle = () => { console.log("Add vehicle"); alert("Add vehicle functionality not implemented.") };
-     const handleEditVehicle = (id: string) => { console.log("Edit vehicle:", id); alert(`Edit vehicle ${id} functionality not implemented.`) };
-     const handleDeleteVehicle = (id: string) => { console.log("Delete vehicle:", id); alert(`Delete vehicle ${id} functionality not implemented.`) };
+    const handleVehicleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        const { name, value } = e.target;
+        setVehicleForm(prev => ({ ...prev, [name]: value }));
+    };
 
-    // Render loading state for the whole page if session is loading initially
+    const handleSaveVehicle = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!session?.isLoggedIn) return;
+
+        const action = editingVehicle ? 'update' : 'add';
+        const vehicleData: VehicleInput = {
+            ...vehicleForm,
+            id: editingVehicle?.id, // Pass ID if updating
+        };
+        
+        setLoadingVehicles(true); // Use general vehicle loading state for dialog submit
+        try {
+            const result: VehicleResponse = await manageVehicleAction({ action, vehicle: vehicleData });
+            if (result.success) {
+                toast({ title: `Vehicle ${action === 'add' ? 'Added' : 'Updated'}`, description: result.message });
+                if(result.vehicles) setVehicles(result.vehicles);
+                setIsVehicleDialogOpen(false);
+            } else {
+                toast({ title: "Vehicle Operation Failed", description: result.message, variant: "destructive" });
+            }
+        } catch (error) {
+            toast({ title: "Error", description: "Could not save vehicle.", variant: "destructive" });
+        } finally {
+            setLoadingVehicles(false);
+        }
+    };
+
+    const handleDeleteVehicle = async (vehicleId: string) => {
+        if (!session?.isLoggedIn) return;
+        setLoadingVehicles(true);
+        try {
+            const result: VehicleResponse = await manageVehicleAction({ action: 'delete', vehicle: { id: vehicleId, make: '', model: '', year: '', nickname: '' }});
+            if (result.success) {
+                toast({ title: "Vehicle Deleted", description: result.message });
+                 if(result.vehicles) setVehicles(result.vehicles);
+            } else {
+                toast({ title: "Deletion Failed", description: result.message, variant: "destructive" });
+            }
+        } catch (error) {
+            toast({ title: "Error", description: "Could not delete vehicle.", variant: "destructive" });
+        } finally {
+            setLoadingVehicles(false);
+        }
+    };
+
+
     if (sessionLoading) {
         return (
              <div className="space-y-8 p-4 md:p-6 lg:p-8">
-                <Skeleton className="h-8 w-48 mb-8" /> {/* Title Skeleton */}
-                 <Card>
-                    <CardHeader><Skeleton className="h-6 w-40" /></CardHeader>
-                    <CardContent className="space-y-4">
-                        <Skeleton className="h-10 w-full" />
-                        <Skeleton className="h-10 w-full" />
-                         <Skeleton className="h-10 w-full" />
-                    </CardContent>
-                    <CardFooter><Skeleton className="h-10 w-24" /></CardFooter>
-                 </Card>
-                <Card>
-                    <CardHeader><Skeleton className="h-6 w-40" /></CardHeader>
-                    <CardContent className="space-y-4">
-                        <Skeleton className="h-10 w-full" />
-                        <Skeleton className="h-10 w-full" />
-                         <Skeleton className="h-10 w-full" />
-                    </CardContent>
-                     <CardFooter><Skeleton className="h-10 w-32" /></CardFooter>
-                 </Card>
-                 <Card>
-                    <CardHeader><Skeleton className="h-6 w-40" /></CardHeader>
-                     <CardContent><Skeleton className="h-16 w-full" /></CardContent>
-                 </Card>
+                <Skeleton className="h-8 w-48 mb-8" />
+                 <Card><CardHeader><Skeleton className="h-6 w-40" /></CardHeader><CardContent className="space-y-4"><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /></CardContent><CardFooter><Skeleton className="h-10 w-24" /></CardFooter></Card>
+                 <Card><CardHeader><Skeleton className="h-6 w-40" /></CardHeader><CardContent className="space-y-4"><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /></CardContent><CardFooter><Skeleton className="h-10 w-32" /></CardFooter></Card>
+                 <Card><CardHeader><Skeleton className="h-6 w-40" /></CardHeader><CardContent><Skeleton className="h-16 w-full" /></CardContent></Card>
              </div>
         );
     }
 
-     // Handle case where session fails to load or user is not logged in (should be caught by middleware)
      if (!session?.isLoggedIn) {
          return (
              <div className="p-8 text-center">
@@ -296,104 +244,61 @@ export default function ProfilePage() {
          );
      }
 
-
   return (
     <div className="space-y-8">
       <h1 className="text-3xl font-bold text-primary">Profile Settings</h1>
 
-      {/* Profile Information */}
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2"><User className="h-5 w-5" /> Profile Information</CardTitle>
-           <CardDescription>Update your personal details.</CardDescription>
-        </CardHeader>
+        <CardHeader><CardTitle className="flex items-center gap-2"><User className="h-5 w-5" /> Profile Information</CardTitle><CardDescription>Update your personal details.</CardDescription></CardHeader>
         <form onSubmit={handleUpdateProfile}>
            <CardContent className="space-y-4">
-                <div className="space-y-2 relative">
-                    <Label htmlFor="name">Full Name</Label>
-                     <User className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none"/>
-                    <Input id="name" value={name} onChange={e => setName(e.target.value)} required disabled={loadingProfile} className="pl-8"/>
-                </div>
-                <div className="space-y-2 relative">
-                    <Label htmlFor="email">Email</Label>
-                     <Mail className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none"/>
-                    <Input id="email" type="email" value={email} disabled title="Email cannot be changed" className="pl-8 bg-muted/50 cursor-not-allowed"/>
-                    <p className="text-xs text-muted-foreground">Email cannot be changed after registration.</p>
-                </div>
-                 <div className="space-y-2 relative">
-                    <Label htmlFor="phone">Phone Number</Label>
-                     <Phone className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none"/>
-                    <Input id="phone" type="tel" value={phone} onChange={e => setPhone(e.target.value)} required disabled={loadingProfile} className="pl-8"/>
-                 </div>
+                <div className="space-y-2 relative"><Label htmlFor="name">Full Name</Label><User className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none"/><Input id="name" value={name} onChange={e => setName(e.target.value)} required disabled={loadingProfile} className="pl-8"/></div>
+                <div className="space-y-2 relative"><Label htmlFor="email">Email</Label><Mail className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none"/><Input id="email" type="email" value={email} disabled title="Email cannot be changed" className="pl-8 bg-muted/50 cursor-not-allowed"/><p className="text-xs text-muted-foreground">Email cannot be changed after registration.</p></div>
+                <div className="space-y-2 relative"><Label htmlFor="phone">Phone Number</Label><Phone className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none"/><Input id="phone" type="tel" value={phone} onChange={e => setPhone(e.target.value)} disabled={loadingProfile} className="pl-8"/></div>
                 {profileError && <p className="text-sm text-destructive">{profileError}</p>}
            </CardContent>
-           <CardFooter>
-                <Button type="submit" disabled={loadingProfile}>
-                    {loadingProfile ? 'Saving...' : 'Save Profile Changes'}
-                </Button>
-            </CardFooter>
+           <CardFooter><Button type="submit" disabled={loadingProfile}>{loadingProfile ? 'Saving...' : 'Save Profile Changes'}</Button></CardFooter>
         </form>
       </Card>
 
-      {/* Change Password */}
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2"><Lock className="h-5 w-5" /> Change Password</CardTitle>
-           <CardDescription>Update your account password.</CardDescription>
-        </CardHeader>
+        <CardHeader><CardTitle className="flex items-center gap-2"><Lock className="h-5 w-5" /> Change Password</CardTitle><CardDescription>Update your account password. (Simulated - requires client-side Firebase re-auth for full security)</CardDescription></CardHeader>
          <form onSubmit={handleChangePassword}>
             <CardContent className="space-y-4">
-                <div className="space-y-2">
-                    <Label htmlFor="current-password">Current Password</Label>
-                    <Input id="current-password" type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} required disabled={loadingPassword} autoComplete="current-password"/>
-                </div>
+                <div className="space-y-2"><Label htmlFor="current-password">Current Password</Label><Input id="current-password" type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} required disabled={loadingPassword} autoComplete="current-password"/></div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                        <Label htmlFor="new-password">New Password</Label>
-                        <Input id="new-password" type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required disabled={loadingPassword} minLength={6} autoComplete="new-password"/>
-                    </div>
-                    <div className="space-y-2">
-                         <Label htmlFor="confirm-new-password">Confirm New Password</Label>
-                         <Input id="confirm-new-password" type="password" value={confirmNewPassword} onChange={e => setConfirmNewPassword(e.target.value)} required disabled={loadingPassword} minLength={6} autoComplete="new-password"/>
-                    </div>
+                    <div className="space-y-2"><Label htmlFor="new-password">New Password</Label><Input id="new-password" type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required disabled={loadingPassword} minLength={6} autoComplete="new-password"/></div>
+                    <div className="space-y-2"><Label htmlFor="confirm-new-password">Confirm New Password</Label><Input id="confirm-new-password" type="password" value={confirmNewPassword} onChange={e => setConfirmNewPassword(e.target.value)} required disabled={loadingPassword} minLength={6} autoComplete="new-password"/></div>
                 </div>
-                 <p className="text-xs text-muted-foreground sm:col-span-2">Password must be at least 6 characters long.</p>
+                <p className="text-xs text-muted-foreground sm:col-span-2">Password must be at least 6 characters long.</p>
                 {passwordError && <p className="text-sm text-destructive">{passwordError}</p>}
             </CardContent>
-            <CardFooter>
-                 <Button type="submit" disabled={loadingPassword}>
-                    {loadingPassword ? 'Changing...' : 'Change Password'}
-                </Button>
-            </CardFooter>
+            <CardFooter><Button type="submit" disabled={loadingPassword}>{loadingPassword ? 'Changing...' : 'Change Password'}</Button></CardFooter>
         </form>
       </Card>
 
-       {/* My Vehicles */}
       <Card>
         <CardHeader className="flex flex-row justify-between items-center">
-           <div>
-             <CardTitle className="flex items-center gap-2"><Car className="h-5 w-5" /> My Vehicles</CardTitle>
-              <CardDescription>Manage the vehicles associated with your account.</CardDescription>
-           </div>
-           <Button variant="outline" size="sm" onClick={handleAddVehicle} disabled={loadingVehicles}>Add New Vehicle</Button>
+           <div><CardTitle className="flex items-center gap-2"><Car className="h-5 w-5" /> My Vehicles</CardTitle><CardDescription>Manage vehicles associated with your account.</CardDescription></div>
+           <Button variant="outline" size="sm" onClick={() => openVehicleDialog()} disabled={loadingVehicles}><PlusCircle className="mr-2 h-4 w-4"/>Add Vehicle</Button>
         </CardHeader>
         <CardContent>
-           {loadingVehicles ? (
-                <div className="space-y-3">
-                    <Skeleton className="h-16 w-full" />
-                    <Skeleton className="h-16 w-full" />
-                </div>
+           {loadingVehicles && vehicles.length === 0 ? ( // Show skeletons only if loading and no vehicles yet
+                <div className="space-y-3"><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /></div>
            ) : vehicles.length > 0 ? (
                 <ul className="space-y-3">
                     {vehicles.map(v => (
                          <li key={v.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center border p-3 rounded-md gap-2">
-                             <div>
-                                <p className="font-medium">{v.nickname} ({v.make} {v.model}, {v.year})</p>
-                                <p className="text-xs text-muted-foreground">ID: {v.id}</p>
-                             </div>
+                             <div><p className="font-medium">{v.nickname} ({v.make} {v.model}, {v.year})</p><p className="text-xs text-muted-foreground">ID: {v.id}</p></div>
                              <div className="space-x-2 shrink-0 mt-2 sm:mt-0">
-                                 <Button variant="ghost" size="sm" onClick={() => handleEditVehicle(v.id)}>Edit</Button>
-                                <Button variant="destructive" size="sm" onClick={() => handleDeleteVehicle(v.id)}>Delete</Button>
+                                <Button variant="ghost" size="sm" onClick={() => openVehicleDialog(v)} disabled={loadingVehicles}><Edit3 className="mr-1 h-4 w-4"/>Edit</Button>
+                                <AlertDialog>
+                                    <AlertDialogTrigger asChild><Button variant="destructive" size="sm" disabled={loadingVehicles}><Trash2 className="mr-1 h-4 w-4"/>Delete</Button></AlertDialogTrigger>
+                                    <AlertDialogContent>
+                                        <AlertDialogHeader><AlertDialogTitle>Are you sure?</AlertDialogTitle><AlertDialogDescription>This action cannot be undone. This will permanently delete the vehicle "{v.nickname}".</AlertDialogDescription></AlertDialogHeader>
+                                        <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => handleDeleteVehicle(v.id!)} className="bg-destructive hover:bg-destructive/90">Delete Vehicle</AlertDialogAction></AlertDialogFooter>
+                                    </AlertDialogContent>
+                                </AlertDialog>
                             </div>
                         </li>
                     ))}
@@ -404,6 +309,42 @@ export default function ProfilePage() {
         </CardContent>
       </Card>
 
+        <Dialog open={isVehicleDialogOpen} onOpenChange={setIsVehicleDialogOpen}>
+            <DialogContent className="sm:max-w-[425px]">
+                <DialogHeader>
+                    <DialogTitle>{editingVehicle ? 'Edit Vehicle' : 'Add New Vehicle'}</DialogTitle>
+                    <DialogDescription>
+                        {editingVehicle ? 'Update the details of your vehicle.' : 'Add a new vehicle to your profile.'}
+                    </DialogDescription>
+                </DialogHeader>
+                <form onSubmit={handleSaveVehicle} className="grid gap-4 py-4">
+                    <div className="grid grid-cols-4 items-center gap-4">
+                        <Label htmlFor="nickname" className="text-right">Nickname</Label>
+                        <Input id="nickname" name="nickname" value={vehicleForm.nickname} onChange={handleVehicleFormChange} className="col-span-3" required />
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                        <Label htmlFor="make" className="text-right">Make</Label>
+                        <Input id="make" name="make" value={vehicleForm.make} onChange={handleVehicleFormChange} className="col-span-3" required />
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                        <Label htmlFor="model" className="text-right">Model</Label>
+                        <Input id="model" name="model" value={vehicleForm.model} onChange={handleVehicleFormChange} className="col-span-3" required />
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                        <Label htmlFor="year" className="text-right">Year</Label>
+                        <Input id="year" name="year" type="number" value={vehicleForm.year} onChange={handleVehicleFormChange} className="col-span-3" required />
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                        <Label htmlFor="serviceHistory" className="text-right">Service History (Optional)</Label>
+                        <Textarea id="serviceHistory" name="serviceHistory" value={vehicleForm.serviceHistory} onChange={handleVehicleFormChange} className="col-span-3" placeholder="e.g., 2024-01-15: Oil Change; 2023-11-20: Brake Pads" />
+                    </div>
+                    <DialogFooter>
+                        <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+                        <Button type="submit" disabled={loadingVehicles}>{loadingVehicles ? 'Saving...' : 'Save Vehicle'}</Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
     </div>
   );
 }

@@ -1,10 +1,18 @@
+
 'use server';
 
 import { z } from 'zod';
-import { cookies } from 'next/headers'; // To manage session cookies
+import { cookies } from 'next/headers';
+import { auth, db } from '@/lib/firebase/config'; // Firebase auth and db instances
+import { 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  sendPasswordResetEmail,
+  signOut as firebaseSignOut
+} from 'firebase/auth';
+import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 
 // --- Schemas ---
-
 const LoginSchema = z.object({
   email: z.string().email({ message: 'Invalid email address.' }),
   password: z.string().min(6, { message: 'Password must be at least 6 characters.' }),
@@ -21,205 +29,218 @@ const ForgotPasswordSchema = z.object({
 });
 
 // --- Types ---
-
 export type LoginInput = z.infer<typeof LoginSchema>;
 export type RegisterInput = z.infer<typeof RegisterSchema>;
 export type ForgotPasswordInput = z.infer<typeof ForgotPasswordSchema>;
 
-export interface AuthResponse {
-  success: boolean;
-  message: string;
-  user?: { // Include basic user info on successful login/register
-    id: string;
+export interface UserProfile {
+    id: string; // Firebase UID
     name: string;
     email: string;
     role: 'customer' | 'staff' | 'admin';
-  };
-  redirectTo?: string; // Optional redirect path
+    phone?: string;
+    createdAt?: any; // Firestore Timestamp
+    updatedAt?: any; // Firestore Timestamp
+}
+
+export interface AuthResponse {
+  success: boolean;
+  message: string;
+  user?: UserProfile;
+  redirectTo?: string;
+}
+
+// --- Helper to set session cookie ---
+async function setSessionCookie(userData: UserProfile) {
+    const sessionData = {
+        userId: userData.id, // Firebase UID
+        name: userData.name,
+        email: userData.email,
+        role: userData.role,
+        phone: userData.phone,
+        loggedInAt: Date.now(),
+    };
+    cookies().set('session', JSON.stringify(sessionData), {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 60 * 60 * 24 * 7, // 1 week
+        path: '/',
+        sameSite: 'lax',
+    });
 }
 
 
 // --- Server Actions ---
 
 /**
- * Simulates logging in a user by checking credentials against a dummy user.
- * In a real app, this would call a PHP/MySQL backend API.
- * On success, sets a session cookie.
+ * Logs in a user using Firebase Authentication.
+ * On success, fetches user profile from Firestore and sets a session cookie.
  */
 export async function loginUser(data: LoginInput): Promise<AuthResponse> {
   try {
     const validatedData = LoginSchema.parse(data);
-    console.log('Server Action: Attempting login for:', validatedData.email);
+    console.log('Server Action: Attempting Firebase login for:', validatedData.email);
 
-    // --- Simulate Backend Call ---
-    // Replace this with your actual API call (fetch/axios) to PHP/MySQL
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    const userCredential = await signInWithEmailAndPassword(auth, validatedData.email, validatedData.password);
+    const firebaseUser = userCredential.user;
 
-    // Dummy user check (replace with database lookup)
-    const dummyUser = {
-        id: '1',
-        name: 'John Doe',
-        email: 'user@example.com',
-        passwordHash: 'password', // In real app, this should be a hash
-        role: 'customer' as const,
-    };
+    if (firebaseUser) {
+        // Fetch user profile from Firestore
+        const userDocRef = doc(db, 'users', firebaseUser.uid);
+        const userDocSnap = await getDoc(userDocRef);
 
-    if (validatedData.email === dummyUser.email && validatedData.password === dummyUser.passwordHash) {
-        console.log('Server Action: Login successful for:', validatedData.email);
+        if (userDocSnap.exists()) {
+            const userProfile = userDocSnap.data() as UserProfile;
+            userProfile.id = firebaseUser.uid; // Ensure ID is set
 
-        // --- Session Management (Using Secure HTTP-Only Cookie) ---
-        const sessionData = {
-            userId: dummyUser.id,
-            name: dummyUser.name,
-            email: dummyUser.email,
-            role: dummyUser.role,
-            loggedInAt: Date.now(),
-        };
-
-        // Set a secure, httpOnly cookie
-        cookies().set('session', JSON.stringify(sessionData), {
-            httpOnly: true, // Prevents client-side JavaScript access
-            secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
-            maxAge: 60 * 60 * 24 * 7, // 1 week expiration
-            path: '/', // Cookie available for all paths
-            sameSite: 'lax', // Protects against CSRF
-        });
-
-        return {
-            success: true,
-            message: 'Login successful!',
-            user: { id: dummyUser.id, name: dummyUser.name, email: dummyUser.email, role: dummyUser.role },
-            redirectTo: '/dashboard',
-        };
+            await setSessionCookie(userProfile);
+            console.log('Server Action: Firebase Login successful, session set for:', userProfile.email);
+            return {
+                success: true,
+                message: 'Login successful!',
+                user: userProfile,
+                redirectTo: userProfile.role === 'admin' ? '/admin/reports' : '/dashboard', // Adjust redirect based on role
+            };
+        } else {
+             // This case should ideally not happen if user registered correctly
+             // Optionally, create a profile if it's missing for an existing auth user
+            console.error('Server Action: Firestore profile not found for user:', firebaseUser.uid);
+             // For now, treat as error
+            await firebaseSignOut(auth); // Sign out the Firebase user
+            return { success: false, message: 'User profile not found. Please contact support.' };
+        }
     } else {
-      console.log('Server Action: Login failed for:', validatedData.email);
-      return { success: false, message: 'Invalid email or password.' };
+      // Should not happen if signInWithEmailAndPassword resolves
+      return { success: false, message: 'Firebase login failed unexpectedly.' };
     }
-    // --- End Simulate Backend Call ---
-
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
-      // Combine Zod error messages
       const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
       return { success: false, message: `Validation failed: ${messages}` };
     }
-    console.error('Server Action Error (loginUser):', error);
-    return { success: false, message: 'An unexpected error occurred during login.' };
+    console.error('Server Action Error (loginUser Firebase):', error);
+    // Map Firebase auth errors to user-friendly messages
+    let message = 'An unexpected error occurred during login.';
+    if (error.code) {
+        switch (error.code) {
+            case 'auth/user-not-found':
+            case 'auth/wrong-password':
+            case 'auth/invalid-credential':
+                message = 'Invalid email or password.';
+                break;
+            case 'auth/invalid-email':
+                message = 'Invalid email format.';
+                break;
+            default:
+                message = 'Login failed. Please try again.';
+        }
+    }
+    return { success: false, message };
   }
 }
 
 /**
- * Simulates registering a new user.
- * In a real app, this would call a PHP/MySQL backend API to create the user.
+ * Registers a new user using Firebase Authentication and creates a user profile in Firestore.
  * On success, sets a session cookie.
  */
 export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
     try {
         const validatedData = RegisterSchema.parse(data);
-        console.log('Server Action: Attempting registration for:', validatedData.email);
+        console.log('Server Action: Attempting Firebase registration for:', validatedData.email);
 
-        // --- Simulate Backend Call ---
-        // Replace with your actual API call to PHP/MySQL
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        const userCredential = await createUserWithEmailAndPassword(auth, validatedData.email, validatedData.password);
+        const firebaseUser = userCredential.user;
 
-        // Simulate checking if user exists (replace with database lookup)
-        const userExists = false;
+        if (firebaseUser) {
+            // Create user profile in Firestore
+            const newUserProfile: UserProfile = {
+                id: firebaseUser.uid,
+                name: validatedData.name,
+                email: firebaseUser.email!,
+                role: 'customer', // Default role
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+            };
+            await setDoc(doc(db, 'users', firebaseUser.uid), newUserProfile);
 
-        if (userExists) {
-             console.log('Server Action: Registration failed - user exists:', validatedData.email);
-             return { success: false, message: 'An account with this email already exists.' };
+            await setSessionCookie(newUserProfile);
+            console.log('Server Action: Firebase Registration successful, session set for:', newUserProfile.email);
+            return {
+                 success: true,
+                 message: 'Registration successful! Welcome!',
+                 user: newUserProfile,
+                 redirectTo: '/dashboard',
+            };
+        } else {
+             return { success: false, message: 'Firebase registration failed unexpectedly.' };
         }
-
-         // Simulate user creation (replace with database insert)
-         const newUser = {
-            id: '2', // Generate unique ID
-            name: validatedData.name,
-            email: validatedData.email,
-            role: 'customer' as const, // Default role
-         };
-         console.log('Server Action: Registration successful for:', validatedData.email);
-
-         // --- Session Management (Using Secure HTTP-Only Cookie) ---
-         const sessionData = {
-            userId: newUser.id,
-            name: newUser.name,
-            email: newUser.email,
-            role: newUser.role,
-            loggedInAt: Date.now(),
-        };
-
-         cookies().set('session', JSON.stringify(sessionData), {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            maxAge: 60 * 60 * 24 * 7,
-            path: '/',
-            sameSite: 'lax',
-        });
-
-        return {
-             success: true,
-             message: 'Registration successful! Welcome!',
-             user: newUser,
-             redirectTo: '/dashboard', // Redirect to dashboard after successful registration
-        };
-        // --- End Simulate Backend Call ---
-
-    } catch (error) {
+    } catch (error: any) {
          if (error instanceof z.ZodError) {
             const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
             return { success: false, message: `Validation failed: ${messages}` };
         }
-        console.error('Server Action Error (registerUser):', error);
-        return { success: false, message: 'An unexpected error occurred during registration.' };
+        console.error('Server Action Error (registerUser Firebase):', error);
+        let message = 'An unexpected error occurred during registration.';
+        if (error.code) {
+            switch (error.code) {
+                case 'auth/email-already-in-use':
+                    message = 'An account with this email already exists.';
+                    break;
+                case 'auth/invalid-email':
+                    message = 'Invalid email format.';
+                    break;
+                case 'auth/weak-password':
+                    message = 'Password is too weak. Please choose a stronger password.';
+                    break;
+                default:
+                    message = 'Registration failed. Please try again.';
+            }
+        }
+        return { success: false, message };
     }
 }
 
-
 /**
- * Simulates sending a password reset link.
- * In a real app, this would call a PHP/MySQL backend API to generate a token and send an email.
+ * Sends a password reset link using Firebase Authentication.
  */
 export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<AuthResponse> {
     try {
         const validatedData = ForgotPasswordSchema.parse(data);
-        console.log('Server Action: Requesting password reset for:', validatedData.email);
+        console.log('Server Action: Requesting Firebase password reset for:', validatedData.email);
 
-        // --- Simulate Backend Call ---
-        // Replace with your actual API call (check email, generate token, send email)
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await sendPasswordResetEmail(auth, validatedData.email);
+        
+        console.log('Server Action: Firebase password reset link request processed for:', validatedData.email);
+        // Always return a generic success message for security
+        return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
 
-        // Simulate email sending success (don't reveal if email exists)
-        const emailSent = true;
-
-        if (emailSent) {
-             console.log('Server Action: Password reset link request processed for:', validatedData.email);
-             // Always return a generic success message for security
-             return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
-        } else {
-            // Log the error server-side, but return generic success to the user
-             console.error('Server Action: Failed to send password reset email for:', validatedData.email);
-             return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
-        }
-        // --- End Simulate Backend Call ---
-
-    } catch (error) {
+    } catch (error: any) {
          if (error instanceof z.ZodError) {
             const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
             return { success: false, message: `Validation failed: ${messages}` };
         }
-        console.error('Server Action Error (sendPasswordResetLink):', error);
-        // Still return generic success to avoid leaking info
+        console.error('Server Action Error (sendPasswordResetLink Firebase):', error);
+        // Still return generic success to avoid leaking info, but log specific errors
+        if (error.code === 'auth/invalid-email') {
+             return { success: false, message: 'Invalid email format.' };
+        }
         return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
     }
 }
 
-
 /**
- * Logs the user out by clearing the session cookie.
+ * Logs the user out by signing out from Firebase and clearing the session cookie.
  */
 export async function logoutUser(): Promise<{ success: boolean }> {
     try {
-        console.log('Server Action: Logging out user');
+        console.log('Server Action: Logging out user (Firebase and cookie)');
+        // Firebase sign out is client-side, but for server actions context, we mainly clear our cookie.
+        // If Firebase client SDK was used for login, it should also sign out there.
+        // Here, we primarily ensure our app's session state is cleared.
+        // await firebaseSignOut(auth); // This would error if auth state not available server-side like this.
+                                 // Actual Firebase logout typically happens on the client.
+                                 // The cookie deletion effectively ends the server-recognized session.
+
         cookies().delete('session');
         return { success: true };
     } catch (error) {
@@ -230,9 +251,9 @@ export async function logoutUser(): Promise<{ success: boolean }> {
 
 /**
  * Retrieves the current user session from the cookie.
- * To be called from Server Components or Route Handlers.
+ * This data is derived from Firebase user info after login/registration.
  */
-export async function getUserSession() {
+export async function getUserSession(): Promise<UserProfile | null> {
     const sessionCookie = cookies().get('session');
     if (!sessionCookie) {
         return null;
@@ -242,13 +263,19 @@ export async function getUserSession() {
         const sessionData = JSON.parse(sessionCookie.value);
         // Basic validation of session data structure
         if (sessionData && sessionData.userId && sessionData.email && sessionData.role) {
-            return sessionData as { userId: string; name: string; email: string; role: 'customer' | 'staff' | 'admin'; loggedInAt: number };
+             // The 'id' field in UserProfile corresponds to 'userId' in cookie
+            return { 
+                id: sessionData.userId, 
+                name: sessionData.name, 
+                email: sessionData.email, 
+                role: sessionData.role,
+                phone: sessionData.phone 
+            } as UserProfile;
         }
         return null;
     } catch (error) {
         console.error('Error parsing session cookie:', error);
-        // Clear invalid cookie
-        cookies().delete('session');
+        cookies().delete('session'); // Clear invalid cookie
         return null;
     }
 }

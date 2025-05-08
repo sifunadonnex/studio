@@ -1,13 +1,14 @@
+
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
-interface UserInfo {
-    id: string;
+export interface UserInfo { // Exporting for use in other client components if needed
+    id: string; // Firebase UID, maps to userId in cookie
     name: string;
     email: string;
     role: 'customer' | 'staff' | 'admin';
-    phone?: string; // Add other relevant fields if needed
+    phone?: string; 
 }
 
 interface SessionState {
@@ -18,23 +19,19 @@ interface SessionState {
 interface UseSessionReturn {
     session: SessionState | null;
     loading: boolean;
-    refreshSession: () => void; // Function to manually re-check session
+    refreshSession: () => void; 
 }
 
 /**
  * Client-side hook to check for the presence and basic validity of the session cookie.
- * **Note:** This hook ONLY checks if the cookie exists on the client.
- * It DOES NOT guarantee the session is still valid on the server.
- * For critical actions or loading sensitive data, always re-validate the session
- * on the server (e.g., in Server Components, Route Handlers, or Server Actions).
- *
- * @returns An object containing the session state (`isLoggedIn`, `user` details if found) and a loading indicator.
+ * The cookie is set by server actions after successful Firebase authentication.
  */
 export function useSession(): UseSessionReturn {
     const [session, setSession] = useState<SessionState | null>(null);
     const [loading, setLoading] = useState(true);
 
-    const checkSession = () => {
+    const checkSession = useCallback(() => {
+        // console.log("useSession: Checking session cookie...");
         setLoading(true);
         try {
             const sessionCookie = document.cookie
@@ -45,54 +42,52 @@ export function useSession(): UseSessionReturn {
                 const cookieValue = sessionCookie.split('=')[1];
                 if (cookieValue) {
                     const decodedValue = decodeURIComponent(cookieValue);
-                    const parsedSession: Partial<UserInfo & { userId: string }> = JSON.parse(decodedValue);
+                    // Structure of cookie set by updated auth actions:
+                    // { userId, name, email, role, phone, loggedInAt }
+                    const parsedSession: Partial<UserInfo & { userId: string, loggedInAt: number }> = JSON.parse(decodedValue);
+                    // console.log("useSession: Parsed cookie data:", parsedSession);
 
-                    // Basic validation: check for essential fields
-                    if (parsedSession.userId && parsedSession.email && parsedSession.role) {
-                         // Map userId to id for consistency if needed
+                    if (parsedSession.userId && parsedSession.email && parsedSession.role && parsedSession.loggedInAt) {
                          const userInfo: UserInfo = {
-                            id: parsedSession.userId,
+                            id: parsedSession.userId, // Map userId from cookie to id in UserInfo
                             name: parsedSession.name || 'User',
                             email: parsedSession.email,
-                            role: parsedSession.role,
-                            // Add phone mapping if it exists in cookie
-                            // phone: parsedSession.phone
+                            role: parsedSession.role as 'customer' | 'staff' | 'admin',
+                            phone: parsedSession.phone || undefined,
                          };
+                        // console.log("useSession: Session valid, user:", userInfo);
                         setSession({ isLoggedIn: true, user: userInfo });
                     } else {
-                        // Cookie exists but is malformed or missing data
-                        console.warn('Session cookie found but malformed.');
+                        console.warn('useSession: Session cookie found but malformed or missing required fields.');
                         setSession({ isLoggedIn: false, user: null });
-                         // Optionally clear the malformed cookie
-                         document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
+                        document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
                     }
                 } else {
-                     // Cookie exists but has no value
+                     console.log("useSession: Session cookie found but has no value.");
                      setSession({ isLoggedIn: false, user: null });
+                     document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
                 }
             } else {
-                // No session cookie found
+                // console.log("useSession: No session cookie found.");
                 setSession({ isLoggedIn: false, user: null });
             }
         } catch (error) {
-            console.error("Error parsing session cookie:", error);
+            console.error("useSession: Error parsing session cookie:", error);
             setSession({ isLoggedIn: false, user: null });
-             // Optionally clear the invalid cookie
-             document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
+            document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
         } finally {
             setLoading(false);
+            // console.log("useSession: Check finished, loading set to false.");
         }
-    };
+    }, []);
 
     useEffect(() => {
-        checkSession(); // Check on initial mount
-
-         // Optional: Listen for storage events if session changes across tabs might occur,
-         // but cookie changes are typically handled per request.
-         // window.addEventListener('storage', checkSession);
-         // return () => window.removeEventListener('storage', checkSession);
-
-    }, []);
+        checkSession();
+        window.addEventListener('focus', checkSession);
+        return () => {
+            window.removeEventListener('focus', checkSession);
+        };
+    }, [checkSession]);
 
     return { session, loading, refreshSession: checkSession };
 }

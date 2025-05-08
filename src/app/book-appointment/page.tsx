@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -13,25 +14,24 @@ import { cn } from '@/lib/utils';
 import { CalendarIcon, User, Mail, Phone } from 'lucide-react';
 import { format } from 'date-fns';
 import { useToast } from "@/hooks/use-toast"
-import { useRouter } from 'next/navigation'; // Import router for potential redirect
-import { useSession } from '@/hooks/use-session'; // Assume this hook exists
-import { bookAppointmentAction, BookAppointmentInput, BookingResponse } from '@/actions/booking'; // Import server action
+import { useRouter } from 'next/navigation'; 
+import { useSession } from '@/hooks/use-session'; 
+import { bookAppointmentAction, BookAppointmentInput, BookingResponse } from '@/actions/booking'; 
 
-// Placeholder data - In a real app, fetch services and available slots from MySQL via PHP
+// Placeholder data - In a real app, fetch services and available slots from Firestore or backend
 const availableServices = [
-  { id: '1', name: 'Standard Oil Change' },
-  { id: '2', name: 'Synthetic Oil Change' },
-  { id: '3', name: 'Brake Inspection & Pad Replacement (Front)' },
-  { id: '4', name: 'Tire Rotation & Balancing' },
-  { id: '5', name: 'Battery Check & Replacement' },
-  { id: '6', name: 'Cooling System Flush' },
-  { id: '7', name: 'Air Conditioning Service' },
-  { id: '8', name: 'Comprehensive Vehicle Inspection' },
-  { id: '9', name: 'Engine Diagnostics' },
+  { id: 'std_oil_change', name: 'Standard Oil Change' },
+  { id: 'syn_oil_change', name: 'Synthetic Oil Change' },
+  { id: 'brake_inspect_front', name: 'Brake Inspection & Pad Replacement (Front)' },
+  { id: 'tire_rotation', name: 'Tire Rotation & Balancing' },
+  { id: 'battery_check', name: 'Battery Check & Replacement' },
+  { id: 'cooling_flush', name: 'Cooling System Flush' },
+  { id: 'ac_service', name: 'Air Conditioning Service' },
+  { id: 'comprehensive_inspect', name: 'Comprehensive Vehicle Inspection' },
+  { id: 'engine_diag', name: 'Engine Diagnostics' },
   { id: 'other', name: 'Other (Specify below)' },
 ];
 
-// Placeholder for available time slots - fetch dynamically based on selected date
 const availableTimeSlots = [
   '08:00 AM', '09:00 AM', '10:00 AM', '11:00 AM',
   '01:00 PM', '02:00 PM', '03:00 PM', '04:00 PM',
@@ -40,8 +40,8 @@ const availableTimeSlots = [
 
 export default function BookAppointmentPage() {
     const { toast } = useToast()
-    const router = useRouter(); // Initialize router
-    const { session, loading: sessionLoading } = useSession(); // Use the session hook
+    const router = useRouter(); 
+    const { session, loading: sessionLoading } = useSession(); 
     const [selectedService, setSelectedService] = useState<string | undefined>(undefined);
     const [date, setDate] = useState<Date | undefined>(undefined);
     const [selectedTime, setSelectedTime] = useState<string | undefined>(undefined);
@@ -55,7 +55,6 @@ export default function BookAppointmentPage() {
     const [loadingBooking, setLoadingBooking] = useState(false);
     const [error, setError] = useState('');
 
-     // Handle pre-selected service from query params
      useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const serviceId = params.get('service');
@@ -63,18 +62,14 @@ export default function BookAppointmentPage() {
             setSelectedService(serviceId);
         }
         const vehicleIdParam = params.get('vehicle');
-        // TODO: Fetch vehicle details based on vehicleIdParam if present and prefill make/model/year
-         if(vehicleIdParam) console.log("Vehicle ID from param:", vehicleIdParam);
-
+         if(vehicleIdParam) console.log("Vehicle ID from param:", vehicleIdParam); // TODO: Fetch vehicle details
      }, []);
 
-     // Pre-fill user details when session loads
     useEffect(() => {
         if (session?.isLoggedIn && session.user) {
             setCustomerName(session.user.name || '');
             setCustomerEmail(session.user.email || '');
-            // Assuming phone number is part of user session/profile data fetched by useSession
-             setCustomerPhone(session.user.phone || ''); // Add phone to useSession hook's data
+            setCustomerPhone(session.user.phone || ''); 
         }
     }, [session]);
 
@@ -84,48 +79,45 @@ export default function BookAppointmentPage() {
         setLoadingBooking(true);
         setError('');
 
-        // Get user ID from session if logged in
         const userId = session?.isLoggedIn ? session.user?.id : null;
+        const currentName = userId ? session.user?.name : customerName;
+        const currentEmail = userId ? session.user?.email : customerEmail;
+        const currentPhone = userId ? session.user?.phone : customerPhone;
 
-        // Use details from session if logged in, otherwise from form state
-        const currentName = session?.isLoggedIn ? session.user?.name : customerName;
-        const currentEmail = session?.isLoggedIn ? session.user?.email : customerEmail;
-        const currentPhone = session?.isLoggedIn ? session.user?.phone : customerPhone;
+        const serviceDetails = availableServices.find(s => s.id === selectedService);
 
-
-        if (!selectedService || !date || !selectedTime || !vehicleMake || (!userId && (!currentEmail || !currentPhone))) {
-            setError('Please fill in all required fields (Service, Date, Time, Vehicle Make, and Email/Phone if not logged in).');
+        if (!selectedService || !serviceDetails || !date || !selectedTime || !vehicleMake || (!userId && (!currentName || !currentEmail || !currentPhone))) {
+            setError('Please fill in all required fields (Service, Date, Time, Vehicle Make, and Name/Email/Phone if not logged in).');
             setLoadingBooking(false);
              toast({ title: "Missing Information", description: "Please fill all required fields.", variant: "destructive" });
             return;
         }
 
         const bookingData: BookAppointmentInput = {
-            userId: userId ?? undefined, // Pass userId or undefined
+            userId: userId ?? undefined,
             serviceId: selectedService,
+            serviceName: serviceDetails.name, // Pass service name
             date: format(date, 'yyyy-MM-dd'),
             time: selectedTime,
             vehicleMake,
-            vehicleModel: vehicleModel || null, // Pass null if empty
-            vehicleYear: vehicleYear || null, // Pass null if empty
-            customerName: userId ? undefined : currentName, // Only send if not logged in
-            customerEmail: userId ? undefined : currentEmail, // Only send if not logged in
-            customerPhone: userId ? undefined : currentPhone, // Only send if not logged in
-            additionalInfo: additionalInfo || null, // Pass null if empty
+            vehicleModel: vehicleModel || null,
+            vehicleYear: vehicleYear || null,
+            customerName: userId ? undefined : currentName,
+            customerEmail: userId ? undefined : currentEmail,
+            customerPhone: userId ? undefined : currentPhone,
+            additionalInfo: additionalInfo || null,
         };
 
         console.log('Attempting booking with:', bookingData);
 
         try {
-            const result: BookingResponse = await bookAppointmentAction(bookingData); // Call Server Action
+            const result: BookingResponse = await bookAppointmentAction(bookingData); 
 
             if (result.success) {
                  toast({
                      title: "Booking Successful!",
-                     description: `Your appointment for ${availableServices.find(s => s.id === selectedService)?.name} on ${bookingData.date} at ${bookingData.time} is confirmed. Appointment ID: ${result.appointmentId}`,
-                     variant: "default",
+                     description: `Your appointment for ${serviceDetails.name} on ${bookingData.date} at ${bookingData.time} is confirmed. Appointment ID: ${result.appointmentId}`,
                  })
-                // Clear form or redirect
                  setSelectedService(undefined);
                  setDate(undefined);
                  setSelectedTime(undefined);
@@ -133,19 +125,17 @@ export default function BookAppointmentPage() {
                  setVehicleModel('');
                  setVehicleYear('');
                  setAdditionalInfo('');
-                 // Don't clear name/email/phone if logged in
                  if (!userId) {
                     setCustomerName('');
                     setCustomerEmail('');
                     setCustomerPhone('');
                  }
-                 // Redirect to appointments page after successful booking
                   router.push('/appointments');
             } else {
-                setError(result.message || 'Failed to book appointment. Please try again later.');
+                setError(result.message || 'Failed to book appointment.');
                  toast({
                      title: "Booking Failed",
-                     description: result.message || "Could not schedule your appointment. Please try again.",
+                     description: result.message || "Could not schedule your appointment.",
                      variant: "destructive",
                  })
             }
@@ -173,7 +163,6 @@ export default function BookAppointmentPage() {
         </CardHeader>
         <CardContent>
            <form onSubmit={handleBooking} className="space-y-6">
-              {/* Service Selection */}
              <div className="space-y-2">
                 <Label htmlFor="service">Service Type <span className="text-destructive">*</span></Label>
                  <Select value={selectedService} onValueChange={setSelectedService} disabled={isLoading}>
@@ -188,7 +177,6 @@ export default function BookAppointmentPage() {
                  </Select>
             </div>
 
-             {/* Date Selection */}
              <div className="space-y-2">
                  <Label htmlFor="date">Preferred Date <span className="text-destructive">*</span></Label>
                  <Popover>
@@ -210,14 +198,13 @@ export default function BookAppointmentPage() {
                         mode="single"
                         selected={date}
                         onSelect={setDate}
-                         disabled={(day) => day < new Date(new Date().setHours(0,0,0,0)) || day.getDay() === 0 } // Disable past dates and Sundays
+                         disabled={(day) => day < new Date(new Date().setHours(0,0,0,0)) || day.getDay() === 0 } 
                         initialFocus
                     />
                     </PopoverContent>
                 </Popover>
             </div>
 
-            {/* Time Selection */}
             <div className="space-y-2">
                 <Label htmlFor="time">Preferred Time <span className="text-destructive">*</span></Label>
                 <Select value={selectedTime} onValueChange={setSelectedTime} disabled={isLoading || !date}>
@@ -225,7 +212,6 @@ export default function BookAppointmentPage() {
                     <SelectValue placeholder={date ? "Select a time slot" : "Select date first"} />
                     </SelectTrigger>
                     <SelectContent>
-                    {/* TODO: Fetch available slots based on selected date */}
                     {availableTimeSlots.map((slot) => (
                         <SelectItem key={slot} value={slot}>{slot}</SelectItem>
                     ))}
@@ -233,7 +219,6 @@ export default function BookAppointmentPage() {
                 </Select>
             </div>
 
-            {/* Vehicle Information */}
             <fieldset className="space-y-4 border p-4 rounded-md">
                 <legend className="text-sm font-medium px-1">Vehicle Information</legend>
                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -252,18 +237,17 @@ export default function BookAppointmentPage() {
                 </div>
              </fieldset>
 
-
-             {/* Customer Information - Show only if NOT logged in */}
-             {!session?.isLoggedIn && !sessionLoading && ( // Also check sessionLoading to avoid flicker
+             {!session?.isLoggedIn && !sessionLoading && ( 
                   <fieldset className="space-y-4 border p-4 rounded-md">
                      <legend className="text-sm font-medium px-1">Contact Information</legend>
                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                          <div className="space-y-2 relative">
-                            <Label htmlFor="name">Your Name</Label>
+                            <Label htmlFor="name">Your Name <span className="text-destructive">*</span></Label>
                              <User className="absolute left-2.5 top-[2.3rem] transform -translate-y-1/2 h-4 w-4 text-muted-foreground"/>
                             <Input
                                  id="name"
                                  placeholder="Full Name"
+                                 required
                                  value={customerName}
                                  onChange={(e) => setCustomerName(e.target.value)}
                                  disabled={isLoading}
@@ -305,7 +289,6 @@ export default function BookAppointmentPage() {
                  </fieldset>
              )}
 
-             {/* Additional Information */}
               <div className="space-y-2">
                 <Label htmlFor="additional-info">Additional Information</Label>
                 <Textarea
