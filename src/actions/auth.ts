@@ -61,7 +61,10 @@ async function setSessionCookie(userData: UserProfile) {
         phone: userData.phone,
         loggedInAt: Date.now(),
     };
-    cookies().set('session', JSON.stringify(sessionData), {
+    // cookies() is a dynamic function, ensure it's awaited if the context implies.
+    // However, typical usage is synchronous for setting.
+    const cookieStore = cookies();
+    cookieStore.set('session', JSON.stringify(sessionData), {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         maxAge: 60 * 60 * 24 * 7, // 1 week
@@ -97,16 +100,16 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
                 email: firestoreData.email,
                 role: firestoreData.role,
                 phone: firestoreData.phone,
-                createdAt: (firestoreData.createdAt as Timestamp)?.toDate().toISOString(), // Serialize
-                updatedAt: (firestoreData.updatedAt as Timestamp)?.toDate().toISOString(), // Serialize
+                createdAt: (firestoreData.createdAt instanceof Timestamp ? firestoreData.createdAt.toDate() : firestoreData.createdAt)?.toISOString(),
+                updatedAt: (firestoreData.updatedAt instanceof Timestamp ? firestoreData.updatedAt.toDate() : firestoreData.updatedAt)?.toISOString(),
             };
 
-            await setSessionCookie(userProfile); // userProfile has serialized dates
+            await setSessionCookie(userProfile); 
             console.log('Server Action: Firebase Login successful, session set for:', userProfile.email);
             return {
                 success: true,
                 message: 'Login successful!',
-                user: userProfile, // userProfile has serialized dates
+                user: userProfile,
                 redirectTo: userProfile.role === 'admin' ? '/admin/reports' : '/dashboard',
             };
         } else {
@@ -161,21 +164,20 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
                 name: validatedData.name,
                 email: firebaseUser.email!,
                 role: 'customer' as 'customer' | 'staff' | 'admin',
-                phone: undefined, // Default or handle as needed
+                phone: undefined, 
                 createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp(),
             };
             await setDoc(doc(db, 'users', firebaseUser.uid), firestoreDocumentData);
 
-            // UserProfile object for session cookie and response (with serialized dates)
             const userProfileForSession: UserProfile = {
                 id: firebaseUser.uid,
                 name: validatedData.name,
                 email: firebaseUser.email!,
                 role: 'customer',
                 phone: undefined,
-                createdAt: now.toISOString(), // Serialize
-                updatedAt: now.toISOString(), // Serialize
+                createdAt: now.toISOString(), 
+                updatedAt: now.toISOString(), 
             };
 
             await setSessionCookie(userProfileForSession);
@@ -183,7 +185,7 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
             return {
                  success: true,
                  message: 'Registration successful! Welcome!',
-                 user: userProfileForSession, // userProfileForSession has serialized dates
+                 user: userProfileForSession, 
                  redirectTo: '/dashboard',
             };
         } else {
@@ -237,6 +239,7 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
         if (error.code === 'auth/invalid-email') {
              return { success: false, message: 'Invalid email format.' };
         }
+        // For security reasons, typically return a generic success message even if email doesn't exist
         return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
     }
 }
@@ -247,7 +250,11 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
 export async function logoutUser(): Promise<{ success: boolean }> {
     try {
         console.log('Server Action: Logging out user (Firebase and cookie)');
-        cookies().delete('session');
+        const cookieStore = cookies(); // Obtain cookie store
+        cookieStore.delete('session'); // Delete cookie
+        // Note: Firebase signOut is client-side, so we don't call it here.
+        // The client should handle Firebase sign-out if necessary.
+        // This server action only clears the session cookie.
         return { success: true };
     } catch (error) {
         console.error('Server Action Error (logoutUser):', error);
@@ -261,7 +268,10 @@ export async function logoutUser(): Promise<{ success: boolean }> {
  * createdAt and updatedAt are not stored in the cookie, so they will be undefined here.
  */
 export async function getUserSession(): Promise<UserProfile | null> {
-    const sessionCookie = cookies().get('session');
+    // The error message "cookies() should be awaited" implies cookies() might be async here.
+    const cookieStore = await cookies(); 
+    const sessionCookie = cookieStore.get('session');
+    
     if (!sessionCookie) {
         return null;
     }
@@ -269,19 +279,23 @@ export async function getUserSession(): Promise<UserProfile | null> {
     try {
         const sessionData = JSON.parse(sessionCookie.value);
         if (sessionData && sessionData.userId && sessionData.email && sessionData.role) {
-            return { 
+            // Construct UserProfile without trying to parse dates that aren't there.
+            const userProfile: UserProfile = { 
                 id: sessionData.userId, 
                 name: sessionData.name, 
                 email: sessionData.email, 
                 role: sessionData.role,
                 phone: sessionData.phone,
-                // createdAt & updatedAt will be undefined here, which is fine for UserProfile type.
-            } as UserProfile;
+                // createdAt & updatedAt are not in the cookie, so they remain undefined.
+            };
+            return userProfile;
         }
         return null;
     } catch (error) {
         console.error('Error parsing session cookie:', error);
-        cookies().delete('session'); 
+        // Clear potentially corrupted cookie
+        const storeForDelete = cookies(); // Re-get for delete, as it might be a new instance contextually
+        storeForDelete.delete('session'); 
         return null;
     }
 }
