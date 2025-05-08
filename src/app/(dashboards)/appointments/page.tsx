@@ -19,13 +19,12 @@ interface Appointment {
   id: string; // Firestore document ID
   serviceId: string;
   serviceName: string;
-  date: string; // YYYY-MM-DD
+  date: string; // YYYY-MM-DD from Firestore, or can be Timestamp if not pre-formatted
   time: string;
   vehicleMake: string;
   vehicleModel?: string | null;
   status: AppointmentStatus;
   createdAt: Timestamp; // Firestore Timestamp
-  // Customer details - might be denormalized or fetched if needed
   customerName?: string; 
   customerEmail?: string;
 }
@@ -42,36 +41,57 @@ export default function MyAppointmentsPage() {
 
 
     const fetchAppointments = useCallback(async () => {
+        // Guard against fetching if session is not ready or user not logged in
         if (!session?.isLoggedIn || !session.user?.id) {
+            setAppointments([]); // Clear appointments if user is not logged in or ID is missing
             setLoadingAppointments(false);
             return;
         }
+        
         setLoadingAppointments(true);
         try {
             const q = query(
                 collection(db, "appointments"), 
-                where("userId", "==", session.user.id),
-                orderBy("createdAt", "desc") // Or orderBy("date", "desc")
+                where("userId", "==", session.user.id), // Use session.user.id which is the Firebase UID
+                orderBy("createdAt", "desc")
             );
             const querySnapshot = await getDocs(q);
-            const userAppointments = querySnapshot.docs.map(doc => ({
-                 id: doc.id, 
-                 ...doc.data() 
-            } as Appointment));
+            const userAppointments = querySnapshot.docs.map(doc => {
+                 const data = doc.data();
+                 return {
+                     id: doc.id,
+                     ...data,
+                     // Ensure date is correctly handled if it might be a Timestamp from Firestore
+                     // For this app, 'date' is stored as a string 'YYYY-MM-DD'
+                     // 'createdAt' is a Timestamp
+                     createdAt: data.createdAt as Timestamp, 
+                 } as Appointment;
+            });
             setAppointments(userAppointments);
         } catch (error) {
             console.error("Error fetching appointments:", error);
             toast({ title: "Error", description: "Could not fetch appointments.", variant: "destructive" });
+            setAppointments([]); // Clear appointments on error
         } finally {
             setLoadingAppointments(false);
         }
-    }, [session, toast]);
+    }, [session, toast]); // Depends on session object (which includes user.id)
 
     useEffect(() => {
-        if (!sessionLoading && session?.isLoggedIn) {
+        if (sessionLoading) {
+            // Session is still loading, keep appointments loading state true or as is.
+            // Initial state of loadingAppointments is true, so this prevents premature fetching.
+            return; 
+        }
+
+        // Session is loaded (sessionLoading is false)
+        if (session?.isLoggedIn && session.user?.id) {
+            // User is logged in and user ID is available
             fetchAppointments();
-        } else if (!sessionLoading && !session?.isLoggedIn) {
-            setLoadingAppointments(false); // Stop loading if user is not logged in
+        } else {
+            // User is not logged in, or session.user.id is not available
+            setAppointments([]); // Clear any existing appointments
+            setLoadingAppointments(false); // Ensure loading indicator is turned off
         }
     }, [sessionLoading, session, fetchAppointments]);
 
@@ -79,7 +99,6 @@ export default function MyAppointmentsPage() {
     const handleReschedule = (id: string) => {
         console.log("Reschedule appointment:", id);
         toast({ title: "Reschedule Initiated", description: "Redirecting to booking page..." });
-        // For a real reschedule, you might pass appointment ID to prefill some details
         window.location.href = `/book-appointment?rescheduleId=${id}`; 
     };
 
@@ -88,11 +107,12 @@ export default function MyAppointmentsPage() {
         try {
             const appointmentDocRef = doc(db, "appointments", id);
             await updateDoc(appointmentDocRef, {
-                status: "Cancelled",
+                status: "Cancelled" as AppointmentStatus,
                 updatedAt: Timestamp.now(),
             });
-            setAppointments(prev => prev.map(app => app.id === id ? { ...app, status: 'Cancelled' } : app));
-            toast({ title: "Appointment Cancelled", description: `Appointment ${id} has been cancelled.` });
+            // Refresh appointments list to reflect the change
+            fetchAppointments(); 
+            toast({ title: "Appointment Cancelled", description: `Appointment ${id.substring(0,8)}... has been cancelled.` });
         } catch (error) {
             console.error("Error cancelling appointment:", error);
             toast({ title: "Cancellation Failed", description: "Could not cancel the appointment.", variant: "destructive" });
@@ -111,10 +131,15 @@ export default function MyAppointmentsPage() {
         }
     };
 
-    // Format Firestore Timestamp to readable date, or handle string date
     const formatDateDisplay = (dateInput: string | Timestamp) => {
-        if (typeof dateInput === 'string') return dateInput; // Already formatted as YYYY-MM-DD
-        if (dateInput instanceof Timestamp) return format(dateInput.toDate(), 'yyyy-MM-dd');
+        if (typeof dateInput === 'string') { // Expects 'YYYY-MM-DD'
+             try {
+                return format(new Date(dateInput), 'PPP'); // Format to 'MMM d, yyyy' for better readability
+             } catch (e) {
+                return dateInput; // Fallback to original string if parsing fails
+             }
+        }
+        if (dateInput instanceof Timestamp) return format(dateInput.toDate(), 'PPP');
         return 'N/A';
     };
 
@@ -136,11 +161,18 @@ export default function MyAppointmentsPage() {
            <CardDescription>View your past, present, and future appointments.</CardDescription>
         </CardHeader>
         <CardContent>
-           {loadingAppointments ? (
+           {sessionLoading || loadingAppointments ? (
                 <div className="flex justify-center items-center h-32">
                     <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    <p className="ml-2 text-muted-foreground">
+                        {sessionLoading ? "Loading session..." : "Fetching appointments..."}
+                    </p>
                 </div>
-           ) : (
+           ) : !session?.isLoggedIn ? (
+                <p className="text-center text-muted-foreground py-8">
+                    Please <Link href="/login" className="text-primary hover:underline">log in</Link> to see your appointments.
+                </p>
+           ): (
              <Table>
                <TableHeader>
                   <TableRow>
@@ -174,7 +206,7 @@ export default function MyAppointmentsPage() {
 
                                       <AlertDialog>
                                           <AlertDialogTrigger asChild>
-                                               <Button variant="destructive" size="sm" disabled={actionLoading[app.id]}>
+                                               <Button variant="destructive" size="sm" disabled={actionLoading[app.id] || app.status === 'Cancelled'}>
                                                    {actionLoading[app.id] && app.status !== 'Cancelled' ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
                                                     <span className="sr-only md:not-sr-only md:ml-1">Cancel</span>
                                                </Button>
@@ -205,7 +237,7 @@ export default function MyAppointmentsPage() {
                    )) : (
                       <TableRow>
                            <TableCell colSpan={7} className="text-center h-24 text-muted-foreground">
-                              {session?.isLoggedIn ? "You have no appointments scheduled." : "Please log in to see your appointments."}
+                               You have no appointments scheduled.
                           </TableCell>
                       </TableRow>
                    )}
@@ -217,3 +249,4 @@ export default function MyAppointmentsPage() {
     </div>
   );
 }
+
