@@ -1,7 +1,8 @@
+
 'use server';
 
 import { z } from 'zod';
-import { getUserSession, UserProfile } from '@/actions/auth'; // To verify user
+import { getUserSession, UserProfile, setSessionCookie } from '@/actions/auth'; // To verify user and update cookie
 import { db, auth as firebaseAuthInstance } from '@/lib/firebase/config'; // Firebase db
 import { doc, updateDoc, setDoc, deleteDoc, getDocs, collection, query, where, serverTimestamp, getDoc, Timestamp } from 'firebase/firestore';
 import { updatePassword as firebaseUpdatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth'; // For password change
@@ -36,6 +37,7 @@ export type VehicleInput = z.infer<typeof VehicleSchema>;
 export interface ProfileResponse {
   success: boolean;
   message: string;
+  user?: UserProfile; // Added to return updated user profile
 }
 export interface VehicleResponse extends ProfileResponse {
     vehicles?: VehicleInput[];
@@ -46,6 +48,7 @@ export interface VehicleResponse extends ProfileResponse {
 /**
  * Updates user profile information (name, phone) in Firestore.
  * Requires user to be authenticated.
+ * Refetches the profile and updates the session cookie.
  */
 export async function updateProfileAction(data: UpdateProfileInput): Promise<ProfileResponse> {
     const session = await getUserSession();
@@ -64,7 +67,16 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Pro
             updatedAt: serverTimestamp(),
         });
 
-        return { success: true, message: "Profile updated successfully." };
+        // Fetch the updated profile to refresh the session cookie
+        const updatedProfile = await fetchUserProfile(session.id);
+        if (updatedProfile) {
+            await setSessionCookie(updatedProfile); // Update the cookie with new info
+            return { success: true, message: "Profile updated successfully.", user: updatedProfile };
+        } else {
+            // This case should be rare if the updateDoc succeeded but indicates an issue fetching the profile
+             console.error(`Server Action (updateProfile): Profile updated for ${session.id}, but failed to refetch for session update.`);
+            return { success: false, message: "Profile updated, but session refresh failed. Please re-login to see changes." };
+        }
 
     } catch (error: any) {
         if (error instanceof z.ZodError) {

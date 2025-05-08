@@ -6,9 +6,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea"; // Added Textarea
 import { User, Mail, Phone, Car, Lock, PlusCircle, Edit3, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useSession, UserInfo } from '@/hooks/use-session'; 
+import { useSession } from '@/hooks/use-session'; 
 import { Skeleton } from '@/components/ui/skeleton';
 import { 
     updateProfileAction, 
@@ -18,7 +19,7 @@ import {
     UpdateProfileInput,
     ChangePasswordInput,
     VehicleInput,
-    ProfileResponse,
+    ProfileResponse, // Updated to potentially include UserProfile
     VehicleResponse
 } from '@/actions/profile'; 
 import Link from 'next/link'; // For login redirect link
@@ -40,7 +41,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
+  // DialogTrigger, // Not used directly, dialog opened programmatically
   DialogClose,
 } from "@/components/ui/dialog"
 
@@ -61,32 +62,38 @@ export default function ProfilePage() {
 
     const [loadingProfile, setLoadingProfile] = useState(false);
     const [loadingPassword, setLoadingPassword] = useState(false);
-    const [loadingVehicles, setLoadingVehicles] = useState(true);
+    const [loadingVehicles, setLoadingVehicles] = useState(true); // Default true to show skeleton initially
+    const [vehicleActionLoading, setVehicleActionLoading] = useState(false); // Specific for dialog submission
     const [profileError, setProfileError] = useState('');
     const [passwordError, setPasswordError] = useState('');
 
     // State for Add/Edit Vehicle Dialog
     const [isVehicleDialogOpen, setIsVehicleDialogOpen] = useState(false);
     const [editingVehicle, setEditingVehicle] = useState<VehicleInput | null>(null);
-    const [vehicleForm, setVehicleForm] = useState<Omit<VehicleInput, 'id'>>({ make: '', model: '', year: '', nickname: '', serviceHistory: '' });
+    // Ensure all fields of VehicleInput (excluding id for new) are here.
+    const [vehicleForm, setVehicleForm] = useState<Omit<VehicleInput, 'id' | 'serviceHistory'> & { serviceHistory?: string }>({ 
+        make: '', model: '', year: '', nickname: '', serviceHistory: '' 
+    });
 
 
-    // Fetch vehicles and populate form fields when session data loads
+    // Fetch vehicles and populate form fields when session data loads or changes
     useEffect(() => {
         if (session?.isLoggedIn && session.user) {
             setName(session.user.name || '');
             setEmail(session.user.email || '');
             setPhone(session.user.phone || '');
-            fetchUserVehicles();
+            if(vehicles.length === 0) fetchUserVehicles(); // Fetch only if not already fetched
         } else if (!sessionLoading && !session?.isLoggedIn) {
-            // If session is loaded and user is not logged in, stop vehicle loading.
             setLoadingVehicles(false);
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [session, sessionLoading]);
+    }, [session, sessionLoading]); // Removed vehicles from deps to avoid re-fetch on vehicle list change
 
     const fetchUserVehicles = useCallback(async () => {
-        if (!session?.isLoggedIn) return;
+        if (!session?.isLoggedIn) {
+            setLoadingVehicles(false);
+            return;
+        }
         setLoadingVehicles(true);
         try {
             const result: VehicleResponse = await fetchVehiclesAction();
@@ -116,7 +123,7 @@ export default function ProfilePage() {
             const result: ProfileResponse = await updateProfileAction(profileData);
             if (result.success) {
                 toast({ title: "Profile Updated", description: result.message });
-                refreshSession(); 
+                refreshSession(); // Key: Re-fetch session data which reads the updated cookie
             } else {
                 setProfileError(result.message || "Failed to update profile.");
                 toast({ title: "Update Failed", description: result.message, variant: "destructive" });
@@ -185,15 +192,16 @@ export default function ProfilePage() {
         const action = editingVehicle ? 'update' : 'add';
         const vehicleData: VehicleInput = {
             ...vehicleForm,
-            id: editingVehicle?.id, // Pass ID if updating
+            id: editingVehicle?.id, 
+            serviceHistory: vehicleForm.serviceHistory || undefined, // Ensure it's optional or string
         };
         
-        setLoadingVehicles(true); // Use general vehicle loading state for dialog submit
+        setVehicleActionLoading(true); 
         try {
             const result: VehicleResponse = await manageVehicleAction({ action, vehicle: vehicleData });
             if (result.success) {
                 toast({ title: `Vehicle ${action === 'add' ? 'Added' : 'Updated'}`, description: result.message });
-                if(result.vehicles) setVehicles(result.vehicles);
+                if(result.vehicles) setVehicles(result.vehicles); // Refresh vehicle list from response
                 setIsVehicleDialogOpen(false);
             } else {
                 toast({ title: "Vehicle Operation Failed", description: result.message, variant: "destructive" });
@@ -201,25 +209,29 @@ export default function ProfilePage() {
         } catch (error) {
             toast({ title: "Error", description: "Could not save vehicle.", variant: "destructive" });
         } finally {
-            setLoadingVehicles(false);
+            setVehicleActionLoading(false);
         }
     };
 
     const handleDeleteVehicle = async (vehicleId: string) => {
-        if (!session?.isLoggedIn) return;
-        setLoadingVehicles(true);
+        if (!session?.isLoggedIn || !vehicleId) return; // Added !vehicleId check
+        setVehicleActionLoading(true); // Use specific loading state for vehicle actions
         try {
-            const result: VehicleResponse = await manageVehicleAction({ action: 'delete', vehicle: { id: vehicleId, make: '', model: '', year: '', nickname: '' }});
+            // Pass minimal required VehicleInput for delete action
+            const result: VehicleResponse = await manageVehicleAction({ 
+                action: 'delete', 
+                vehicle: { id: vehicleId, make: '', model: '', year: '', nickname: '' }
+            });
             if (result.success) {
                 toast({ title: "Vehicle Deleted", description: result.message });
-                 if(result.vehicles) setVehicles(result.vehicles);
+                 if(result.vehicles) setVehicles(result.vehicles); // Refresh vehicle list from response
             } else {
                 toast({ title: "Deletion Failed", description: result.message, variant: "destructive" });
             }
         } catch (error) {
             toast({ title: "Error", description: "Could not delete vehicle.", variant: "destructive" });
         } finally {
-            setLoadingVehicles(false);
+            setVehicleActionLoading(false);
         }
     };
 
@@ -239,7 +251,7 @@ export default function ProfilePage() {
          return (
              <div className="p-8 text-center">
                  <p>Please log in to view your profile.</p>
-                 <Link href="/login"><Button variant="link">Login</Button></Link>
+                 <Link href="/login" passHref><Button variant="link">Login</Button></Link>
              </div>
          );
      }
@@ -280,10 +292,10 @@ export default function ProfilePage() {
       <Card>
         <CardHeader className="flex flex-row justify-between items-center">
            <div><CardTitle className="flex items-center gap-2"><Car className="h-5 w-5" /> My Vehicles</CardTitle><CardDescription>Manage vehicles associated with your account.</CardDescription></div>
-           <Button variant="outline" size="sm" onClick={() => openVehicleDialog()} disabled={loadingVehicles}><PlusCircle className="mr-2 h-4 w-4"/>Add Vehicle</Button>
+           <Button variant="outline" size="sm" onClick={() => openVehicleDialog()} disabled={loadingVehicles || vehicleActionLoading}><PlusCircle className="mr-2 h-4 w-4"/>Add Vehicle</Button>
         </CardHeader>
         <CardContent>
-           {loadingVehicles && vehicles.length === 0 ? ( // Show skeletons only if loading and no vehicles yet
+           {loadingVehicles && vehicles.length === 0 ? ( 
                 <div className="space-y-3"><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /></div>
            ) : vehicles.length > 0 ? (
                 <ul className="space-y-3">
@@ -291,12 +303,12 @@ export default function ProfilePage() {
                          <li key={v.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center border p-3 rounded-md gap-2">
                              <div><p className="font-medium">{v.nickname} ({v.make} {v.model}, {v.year})</p><p className="text-xs text-muted-foreground">ID: {v.id}</p></div>
                              <div className="space-x-2 shrink-0 mt-2 sm:mt-0">
-                                <Button variant="ghost" size="sm" onClick={() => openVehicleDialog(v)} disabled={loadingVehicles}><Edit3 className="mr-1 h-4 w-4"/>Edit</Button>
+                                <Button variant="ghost" size="sm" onClick={() => openVehicleDialog(v)} disabled={vehicleActionLoading}><Edit3 className="mr-1 h-4 w-4"/>Edit</Button>
                                 <AlertDialog>
-                                    <AlertDialogTrigger asChild><Button variant="destructive" size="sm" disabled={loadingVehicles}><Trash2 className="mr-1 h-4 w-4"/>Delete</Button></AlertDialogTrigger>
+                                    <AlertDialogTrigger asChild><Button variant="destructive" size="sm" disabled={vehicleActionLoading}><Trash2 className="mr-1 h-4 w-4"/>Delete</Button></AlertDialogTrigger>
                                     <AlertDialogContent>
                                         <AlertDialogHeader><AlertDialogTitle>Are you sure?</AlertDialogTitle><AlertDialogDescription>This action cannot be undone. This will permanently delete the vehicle "{v.nickname}".</AlertDialogDescription></AlertDialogHeader>
-                                        <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => handleDeleteVehicle(v.id!)} className="bg-destructive hover:bg-destructive/90">Delete Vehicle</AlertDialogAction></AlertDialogFooter>
+                                        <AlertDialogFooter><AlertDialogCancel disabled={vehicleActionLoading}>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => v.id && handleDeleteVehicle(v.id)} disabled={vehicleActionLoading || !v.id} className="bg-destructive hover:bg-destructive/90">Delete Vehicle</AlertDialogAction></AlertDialogFooter>
                                     </AlertDialogContent>
                                 </AlertDialog>
                             </div>
@@ -320,27 +332,27 @@ export default function ProfilePage() {
                 <form onSubmit={handleSaveVehicle} className="grid gap-4 py-4">
                     <div className="grid grid-cols-4 items-center gap-4">
                         <Label htmlFor="nickname" className="text-right">Nickname</Label>
-                        <Input id="nickname" name="nickname" value={vehicleForm.nickname} onChange={handleVehicleFormChange} className="col-span-3" required />
+                        <Input id="nickname" name="nickname" value={vehicleForm.nickname} onChange={handleVehicleFormChange} className="col-span-3" required disabled={vehicleActionLoading} />
                     </div>
                     <div className="grid grid-cols-4 items-center gap-4">
                         <Label htmlFor="make" className="text-right">Make</Label>
-                        <Input id="make" name="make" value={vehicleForm.make} onChange={handleVehicleFormChange} className="col-span-3" required />
+                        <Input id="make" name="make" value={vehicleForm.make} onChange={handleVehicleFormChange} className="col-span-3" required disabled={vehicleActionLoading}/>
                     </div>
                     <div className="grid grid-cols-4 items-center gap-4">
                         <Label htmlFor="model" className="text-right">Model</Label>
-                        <Input id="model" name="model" value={vehicleForm.model} onChange={handleVehicleFormChange} className="col-span-3" required />
+                        <Input id="model" name="model" value={vehicleForm.model} onChange={handleVehicleFormChange} className="col-span-3" required disabled={vehicleActionLoading}/>
                     </div>
                     <div className="grid grid-cols-4 items-center gap-4">
                         <Label htmlFor="year" className="text-right">Year</Label>
-                        <Input id="year" name="year" type="number" value={vehicleForm.year} onChange={handleVehicleFormChange} className="col-span-3" required />
+                        <Input id="year" name="year" type="number" pattern="\d{4}" title="Enter a 4-digit year" value={vehicleForm.year} onChange={handleVehicleFormChange} className="col-span-3" required disabled={vehicleActionLoading}/>
                     </div>
                     <div className="grid grid-cols-4 items-center gap-4">
-                        <Label htmlFor="serviceHistory" className="text-right">Service History (Optional)</Label>
-                        <Textarea id="serviceHistory" name="serviceHistory" value={vehicleForm.serviceHistory} onChange={handleVehicleFormChange} className="col-span-3" placeholder="e.g., 2024-01-15: Oil Change; 2023-11-20: Brake Pads" />
+                        <Label htmlFor="serviceHistory" className="text-right">Service History</Label>
+                        <Textarea id="serviceHistory" name="serviceHistory" value={vehicleForm.serviceHistory || ''} onChange={handleVehicleFormChange} className="col-span-3" placeholder="e.g., 2024-01-15: Oil Change; 2023-11-20: Brake Pads" disabled={vehicleActionLoading}/>
                     </div>
                     <DialogFooter>
-                        <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-                        <Button type="submit" disabled={loadingVehicles}>{loadingVehicles ? 'Saving...' : 'Save Vehicle'}</Button>
+                        <DialogClose asChild><Button type="button" variant="outline" disabled={vehicleActionLoading}>Cancel</Button></DialogClose>
+                        <Button type="submit" disabled={vehicleActionLoading}>{vehicleActionLoading ? 'Saving...' : 'Save Vehicle'}</Button>
                     </DialogFooter>
                 </form>
             </DialogContent>
@@ -348,3 +360,4 @@ export default function ProfilePage() {
     </div>
   );
 }
+
