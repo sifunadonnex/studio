@@ -5,11 +5,11 @@ import { z } from 'zod';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation'; // Import redirect
 import { auth, db } from '@/lib/firebase/config'; // Firebase auth and db instances
-import { 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   sendPasswordResetEmail,
-  signOut as firebaseSignOut
+  signOut as firebaseSignOut // Renamed to avoid conflict
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
 
@@ -53,7 +53,7 @@ export interface AuthResponse {
 // --- Helper to set session cookie ---
 export async function setSessionCookie(userData: UserProfile) {
     const sessionData = {
-        userId: userData.id, 
+        userId: userData.id,
         name: userData.name,
         email: userData.email,
         role: userData.role,
@@ -63,13 +63,19 @@ export async function setSessionCookie(userData: UserProfile) {
     const cookieStore = await cookies();
     const nodeEnv = process.env.NODE_ENV;
     const isProduction = nodeEnv === 'production';
-    
+
     console.log(`[setSessionCookie] Preparing to set cookie. UserData role: ${userData.role}. UserData (first 100 chars): ${JSON.stringify(userData).substring(0,100)}...`);
-    console.log(`[setSessionCookie] NODE_ENV: ${nodeEnv}, isProduction: ${isProduction}. Secure flag will be: ${isProduction}`);
+    console.log(`[setSessionCookie] NODE_ENV: ${nodeEnv}, isProduction: ${isProduction}.`);
+
+    // TEMPORARY DEBUGGING: Force httpOnly and secure to false
+    const tempHttpOnly = false; // Original: true
+    const tempSecure = false;   // Original: isProduction
+
+    console.log(`[setSessionCookie] DEBUGGING: httpOnly forced to: ${tempHttpOnly}, secure forced to: ${tempSecure}`);
 
     const cookieOptions = {
-        httpOnly: true,
-        secure: isProduction,
+        httpOnly: tempHttpOnly,
+        secure: tempSecure,
         maxAge: 60 * 60 * 24 * 7, // 1 week
         path: '/',
         sameSite: 'lax' as 'lax' | 'strict' | 'none' | undefined, // Ensure type matches
@@ -82,7 +88,14 @@ export async function setSessionCookie(userData: UserProfile) {
 
     try {
         cookieStore.set('session', JSON.stringify(sessionData), cookieOptions);
-        console.log('[setSessionCookie] Cookie "session" set successfully.');
+        console.log('[setSessionCookie] Cookie "session" set operation completed.');
+        // Verification step
+        const checkCookie = cookieStore.get('session'); // This checks the store, not necessarily what the browser will send next
+        if (checkCookie) {
+            console.log('[setSessionCookie] Verification: Cookie "session" found in internal store immediately after set. Value (first 30):', checkCookie.value.substring(0,30) + "...");
+        } else {
+            console.warn('[setSessionCookie] Verification: Cookie "session" NOT found in internal store immediately after set.');
+        }
     } catch (error) {
         console.error('[setSessionCookie] CRITICAL ERROR setting cookie:', error);
     }
@@ -115,7 +128,7 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
 
             if (!firestoreData.role || !['customer', 'staff', 'admin'].includes(firestoreData.role)) {
                 console.error(`[loginUser] CRITICAL: User role '${firestoreData.role}' is missing or invalid in Firestore for user:`, firebaseUser.uid);
-                await firebaseSignOut(auth); 
+                await firebaseSignOut(auth);
                 return { success: false, message: 'User profile is incomplete or has an invalid role. Please contact support.' };
             }
 
@@ -123,23 +136,23 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
                 id: firebaseUser.uid,
                 name: firestoreData.name,
                 email: firestoreData.email,
-                role: firestoreData.role as 'customer' | 'staff' | 'admin', 
-                phone: firestoreData.phone || null, // Ensure phone is null if not present
+                role: firestoreData.role as 'customer' | 'staff' | 'admin',
+                phone: firestoreData.phone || null,
                 createdAt: (firestoreData.createdAt instanceof Timestamp ? firestoreData.createdAt.toDate() : firestoreData.createdAt)?.toISOString(),
                 updatedAt: (firestoreData.updatedAt instanceof Timestamp ? firestoreData.updatedAt.toDate() : firestoreData.updatedAt)?.toISOString(),
             };
-            
+
             console.log('[loginUser] UserProfile object to be set in cookie:', userProfile);
-            await setSessionCookie(userProfile); 
+            await setSessionCookie(userProfile);
             console.log('[loginUser] Server Action: Firebase Login successful, session set for:', userProfile.email);
-            
+
             const redirectToPath = userProfile.role === 'admin' ? '/admin/reports' : '/dashboard';
             console.log(`[loginUser] Redirecting to ${redirectToPath}`);
-            redirect(redirectToPath); 
+            redirect(redirectToPath);
 
         } else {
             console.error('[loginUser] Server Action: Firestore profile not found for user:', firebaseUser.uid);
-            await firebaseSignOut(auth); 
+            await firebaseSignOut(auth);
             return { success: false, message: 'User profile not found. Please contact support.' };
         }
     } else {
@@ -152,7 +165,7 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
     }
     if (error.message === 'NEXT_REDIRECT' || (typeof error.digest === 'string' && error.digest.startsWith('NEXT_REDIRECT'))) {
       console.log('[loginUser] Caught redirect error, re-throwing.');
-      throw error; 
+      throw error;
     }
     console.error('[loginUser] Server Action Error (loginUser Firebase):', error);
     let message = 'An unexpected error occurred during login.';
@@ -187,26 +200,26 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
         const userCredential = await createUserWithEmailAndPassword(auth, validatedData.email, validatedData.password);
         const firebaseUser = userCredential.user;
 
-        if (!firebaseUser) { 
+        if (!firebaseUser) {
             console.error('[registerUser] Firebase user creation failed, user object is null.');
             return { success: false, message: 'Registration process failed: no user data received from authentication provider.' };
         }
-        if (!firebaseUser.email) { 
+        if (!firebaseUser.email) {
              console.error('[registerUser] Firebase user created, but email is missing.');
              await firebaseSignOut(auth);
              return { success: false, message: 'Registration process failed due to incomplete user data (missing email).' };
         }
-        
+
         const now = new Date();
         const firestoreDocumentData = {
             name: validatedData.name,
-            email: firebaseUser.email, 
+            email: firebaseUser.email,
             role: 'customer' as 'customer' | 'staff' | 'admin', // Default role
             phone: null, 
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
         };
-        
+
         console.log('[registerUser] Attempting to write to Firestore for user:', firebaseUser.uid, 'with data:', firestoreDocumentData);
         await setDoc(doc(db, 'users', firebaseUser.uid), firestoreDocumentData);
         console.log('[registerUser] Firestore document created successfully for user:', firebaseUser.uid);
@@ -214,19 +227,19 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
         const userProfileForSession: UserProfile = {
             id: firebaseUser.uid,
             name: validatedData.name,
-            email: firebaseUser.email, 
-            role: 'customer', 
-            phone: null, 
-            createdAt: now.toISOString(), 
-            updatedAt: now.toISOString(), 
+            email: firebaseUser.email,
+            role: 'customer',
+            phone: null,
+            createdAt: now.toISOString(),
+            updatedAt: now.toISOString(),
         };
-        
+
         console.log('[registerUser] UserProfile object to be set in cookie:', userProfileForSession);
         await setSessionCookie(userProfileForSession);
         console.log('[registerUser] Server Action: Firebase Registration successful, session set for:', userProfileForSession.email);
-        
+
         console.log('[registerUser] Redirecting to /dashboard');
-        redirect('/dashboard'); 
+        redirect('/dashboard');
 
     } catch (error: any) {
          if (error instanceof z.ZodError) {
@@ -235,12 +248,12 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
         }
         if (error.message === 'NEXT_REDIRECT' || (typeof error.digest === 'string' && error.digest.startsWith('NEXT_REDIRECT'))) {
             console.log('[registerUser] Caught redirect error, re-throwing.');
-            throw error; 
+            throw error;
         }
 
         console.error('[registerUser] Server Action Error (registerUser Firebase):', error);
         let message = 'An unexpected error occurred during registration.';
-        if (error.code) { 
+        if (error.code) {
             switch (error.code) {
                 case 'auth/email-already-in-use':
                     message = 'An account with this email already exists.';
@@ -251,10 +264,10 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
                 case 'auth/weak-password':
                     message = 'Password is too weak. Please choose a stronger password.';
                     break;
-                default: 
+                default:
                     message = `Registration error: ${error.message || 'Please try again.'} (Auth Code: ${error.code || 'N/A'})`;
             }
-        } else if (error.message) { 
+        } else if (error.message) {
             if (error.message && error.message.includes("Unsupported field value: undefined")) {
                 message = `Registration error: Internal data format issue. Please contact support. (Details: ${error.message})`;
             } else {
@@ -274,7 +287,7 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
         console.log('[sendPasswordResetLink] Server Action: Requesting Firebase password reset for:', validatedData.email);
 
         await sendPasswordResetEmail(auth, validatedData.email);
-        
+
         console.log('[sendPasswordResetLink] Server Action: Firebase password reset link request processed for:', validatedData.email);
         return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
 
@@ -297,9 +310,12 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
 export async function logoutUser(): Promise<{ success: boolean }> {
     try {
         console.log('[logoutUser] Server Action: Logging out user (Firebase and cookie)');
-        const cookieStore = await cookies(); 
+        await firebaseSignOut(auth); 
+        console.log('[logoutUser] Firebase sign-out successful.');
+
+        const cookieStore = await cookies();
         console.log('[logoutUser] Deleting "session" cookie.');
-        cookieStore.delete('session'); 
+        cookieStore.delete('session');
         console.log('[logoutUser] Session cookie deleted from store.');
         return { success: true };
     } catch (error) {
@@ -314,12 +330,12 @@ export async function logoutUser(): Promise<{ success: boolean }> {
 export async function getUserSession(): Promise<UserProfile | null> {
     console.log('[getUserSession] Attempting to get session cookie...');
     const cookieStore = await cookies();
-    
+
     const allCookies = cookieStore.getAll();
     console.log('[getUserSession] All cookies available to server on this request:', JSON.stringify(allCookies.map(c => ({ name: c.name, value: c.value.substring(0,30) + "..."}))));
 
     const sessionCookie = cookieStore.get('session');
-    
+
     if (!sessionCookie) {
         console.log('[getUserSession] No "session" cookie found in store.');
         return null;
@@ -341,12 +357,12 @@ export async function getUserSession(): Promise<UserProfile | null> {
                 console.warn(`[getUserSession] Parsed session data has an invalid role: '${sessionData.role}'. Returning null.`);
                 return null;
             }
-            const userProfile: UserProfile = { 
-                id: sessionData.userId, 
-                name: sessionData.name || 'User', 
-                email: sessionData.email, 
-                role: sessionData.role, 
-                phone: sessionData.phone || null, 
+            const userProfile: UserProfile = {
+                id: sessionData.userId,
+                name: sessionData.name || 'User',
+                email: sessionData.email,
+                role: sessionData.role,
+                phone: sessionData.phone || null,
             };
             console.log('[getUserSession] Session valid and parsed. User role from cookie:', userProfile.role, 'Returning user profile for:', userProfile.email);
             return userProfile;
@@ -358,9 +374,3 @@ export async function getUserSession(): Promise<UserProfile | null> {
         return null;
     }
 }
-    
-
-    
-
-
-
