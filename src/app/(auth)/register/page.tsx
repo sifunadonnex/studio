@@ -135,7 +135,7 @@ export default function RegisterPage() {
                 placeholder="••••••••"
                 required
                 value={confirmPassword}
-                onChange={(e) => setConfirmNewPassword(e.target.value)}
+                onChange={(e) => setConfirmPassword(e.target.value)}
                 disabled={loading}
                 autoComplete="new-password"
               />
@@ -158,3 +158,4 @@ export default function RegisterPage() {
     </div>
   );
 }
+
