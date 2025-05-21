@@ -48,7 +48,7 @@ import { useRouter } from 'next/navigation';
 
 export default function ProfilePage() {
     const { toast } = useToast();
-    const { userProfile } = useUserSession(); // Use new context hook
+    const { userProfile } = useUserSession(); 
     const router = useRouter();
     
     const [name, setName] = useState('');
@@ -62,7 +62,7 @@ export default function ProfilePage() {
     const [vehicles, setVehicles] = useState<VehicleInput[]>([]); 
     const [loadingProfile, setLoadingProfile] = useState(false);
     const [loadingPassword, setLoadingPassword] = useState(false);
-    const [loadingVehicles, setLoadingVehicles] = useState(true);
+    const [loadingVehicles, setLoadingVehicles] = useState(true); // Start true if userProfile might not be immediately available
     const [vehicleActionLoading, setVehicleActionLoading] = useState(false);
     const [profileError, setProfileError] = useState('');
     const [passwordError, setPasswordError] = useState('');
@@ -74,7 +74,7 @@ export default function ProfilePage() {
     });
 
     const fetchUserVehicles = useCallback(async () => {
-        if (!userProfile) { // Check userProfile from context
+        if (!userProfile) { 
             setLoadingVehicles(false);
             return;
         }
@@ -98,15 +98,15 @@ export default function ProfilePage() {
             setName(userProfile.name || '');
             setEmail(userProfile.email || '');
             setPhone(userProfile.phone || '');
-            if(vehicles.length === 0) fetchUserVehicles();
+            fetchUserVehicles(); 
         } else {
-             // This case should ideally be handled by the layout redirecting unauthenticated users.
-             // If userProfile is null here, it means context might not be ready or an auth issue.
-             console.warn("ProfilePage: userProfile is null in useEffect. This might indicate an issue if not initial load.");
+             // userProfile is null, SessionContext might still be loading or no session.
+             // If layout redirects for no session, this path might not be hit often when unauth.
+             // Setting loadingVehicles to false ensures skeletons don't show indefinitely if userProfile never arrives.
              setLoadingVehicles(false); 
         }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [userProfile]); // Removed fetchUserVehicles from deps, it's called conditionally
+    }, [userProfile, fetchUserVehicles]);
+
 
     const handleUpdateProfile = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -123,9 +123,8 @@ export default function ProfilePage() {
             const result: ProfileResponse = await updateProfileAction(profileData);
             if (result.success) {
                 toast({ title: "Profile Updated", description: result.message });
-                // The session cookie is updated server-side.
-                // To reflect changes in the client-side context, we need to refresh the page or re-fetch session.
-                // router.refresh() re-runs Server Components for the current route, including layouts.
+                // router.refresh() re-runs Server Components for the current route (including layouts),
+                // which will update the SessionContext with the new profile data from the updated cookie.
                 router.refresh(); 
             } else {
                 setProfileError(result.message || "Failed to update profile.");
@@ -222,7 +221,7 @@ export default function ProfilePage() {
         try {
             const result: VehicleResponse = await manageVehicleAction({ 
                 action: 'delete', 
-                vehicle: { id: vehicleId, make: '', model: '', year: '', nickname: '' }
+                vehicle: { id: vehicleId, make: '', model: '', year: '', nickname: '' } // Only ID is needed for delete action
             });
             if (result.success) {
                 toast({ title: "Vehicle Deleted", description: result.message });
@@ -237,8 +236,8 @@ export default function ProfilePage() {
         }
     };
 
-    // Show loading skeletons if userProfile from context isn't available yet OR vehicles are loading
-    if (!userProfile || (loadingVehicles && vehicles.length === 0)) {
+    // Show loading skeletons if userProfile from context isn't available yet OR vehicles are actively loading
+    if (!userProfile || loadingVehicles) {
         return (
              <div className="space-y-8 p-4 md:p-6 lg:p-8">
                 <Skeleton className="h-8 w-48 mb-8" />
@@ -248,11 +247,11 @@ export default function ProfilePage() {
              </div>
         );
     }
-    // If userProfile is definitively null after context has loaded (should be caught by layout, but as a fallback)
+    // This explicit check might be redundant if layout handles redirect, but good as a fallback.
      if (!userProfile) {
          return (
              <div className="p-8 text-center">
-                 <p>Session not available. Please try logging in again.</p>
+                 <p>Please log in to view your profile.</p>
                  <Link href="/login" passHref><Button variant="link">Login</Button></Link>
              </div>
          );
@@ -277,7 +276,7 @@ export default function ProfilePage() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle className="flex items-center gap-2"><Lock className="h-5 w-5" /> Change Password</CardTitle><CardDescription>Update your account password. (Simulated - requires client-side Firebase re-auth for full security)</CardDescription></CardHeader>
+        <CardHeader><CardTitle className="flex items-center gap-2"><Lock className="h-5 w-5" /> Change Password</CardTitle><CardDescription>Update your account password. (Simulated - real Firebase password changes require re-authentication by the user for security, typically handled client-side, or Admin SDK for server-side changes without re-auth).</CardDescription></CardHeader>
          <form onSubmit={handleChangePassword}>
             <CardContent className="space-y-4">
                 <div className="space-y-2"><Label htmlFor="current-password">Current Password</Label><Input id="current-password" type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} required disabled={loadingPassword} autoComplete="current-password"/></div>
@@ -294,8 +293,8 @@ export default function ProfilePage() {
 
       <Card>
         <CardHeader className="flex flex-row justify-between items-center">
-           <div><CardTitle className="flex items-center gap-2"><Car className="h-5 w-5" /> My Vehicles</CardTitle><CardDescription>Manage vehicles associated with your account.</CardDescription></div>
-           <Button variant="outline" size="sm" onClick={() => openVehicleDialog()} disabled={loadingVehicles || vehicleActionLoading}><PlusCircle className="mr-2 h-4 w-4"/>Add Vehicle</Button>
+           <div><CardTitle className="flex items-center gap-2"><Car className="h-5 w-5" /> My Vehicles</CardTitle><CardDescription>Manage vehicles associated with your account for predictive maintenance and easier booking.</CardDescription></div>
+           <Button variant="outline" size="sm" onClick={() => openVehicleDialog()} disabled={vehicleActionLoading}><PlusCircle className="mr-2 h-4 w-4"/>Add Vehicle</Button>
         </CardHeader>
         <CardContent>
            {loadingVehicles && vehicles.length === 0 ? ( 
@@ -319,7 +318,7 @@ export default function ProfilePage() {
                     ))}
                 </ul>
            ) : (
-             <p className="text-muted-foreground text-center py-4">No vehicles added yet.</p>
+             <p className="text-muted-foreground text-center py-4">No vehicles added yet. Add a vehicle to enable features like predictive maintenance.</p>
            )}
         </CardContent>
       </Card>
@@ -329,7 +328,7 @@ export default function ProfilePage() {
                 <DialogHeader>
                     <DialogTitle>{editingVehicle ? 'Edit Vehicle' : 'Add New Vehicle'}</DialogTitle>
                     <DialogDescription>
-                        {editingVehicle ? 'Update the details of your vehicle.' : 'Add a new vehicle to your profile.'}
+                        {editingVehicle ? 'Update the details of your vehicle.' : 'Add a new vehicle to your profile for easier booking and predictive maintenance.'}
                     </DialogDescription>
                 </DialogHeader>
                 <form onSubmit={handleSaveVehicle} className="grid gap-4 py-4">
@@ -351,7 +350,7 @@ export default function ProfilePage() {
                     </div>
                     <div className="grid grid-cols-4 items-center gap-4">
                         <Label htmlFor="serviceHistory" className="text-right">Service History</Label>
-                        <Textarea id="serviceHistory" name="serviceHistory" value={vehicleForm.serviceHistory || ''} onChange={handleVehicleFormChange} className="col-span-3" placeholder="e.g., 2024-01-15: Oil Change; 2023-11-20: Brake Pads" disabled={vehicleActionLoading}/>
+                        <Textarea id="serviceHistory" name="serviceHistory" value={vehicleForm.serviceHistory || ''} onChange={handleVehicleFormChange} className="col-span-3" placeholder="e.g., 2024-01-15: Oil Change; 2023-11-20: Brake Pads. This helps with predictive maintenance." disabled={vehicleActionLoading}/>
                     </div>
                     <DialogFooter>
                         <DialogClose asChild><Button type="button" variant="outline" disabled={vehicleActionLoading}>Cancel</Button></DialogClose>
@@ -363,3 +362,4 @@ export default function ProfilePage() {
     </div>
   );
 }
+
