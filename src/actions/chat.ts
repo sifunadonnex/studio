@@ -324,7 +324,7 @@ export async function fetchMessagesForUserByStaffAction(targetUserId: string): P
 
         return { success: true, message: "Chat history fetched successfully.", messages: chatMessages };
 
-    } catch (error: any)
+    } catch (error: any) { // Added the missing curly brace here
         console.error(`[fetchMessagesForUserByStaffAction] Error fetching chat history for user ${targetUserId}:`, error);
         let errorMessage = 'An unexpected error occurred.';
         if (error.code === 'failed-precondition' && error.message && error.message.includes('index')) {
