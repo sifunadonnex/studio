@@ -64,7 +64,7 @@ export async function setSessionCookie(userData: UserProfile) {
     const nodeEnv = process.env.NODE_ENV;
     const isProduction = nodeEnv === 'production';
     
-    console.log(`[setSessionCookie] Preparing to set cookie. UserData: ${JSON.stringify(userData).substring(0,100)}...`);
+    console.log(`[setSessionCookie] Preparing to set cookie. UserData role: ${userData.role}. UserData (first 100 chars): ${JSON.stringify(userData).substring(0,100)}...`);
     console.log(`[setSessionCookie] NODE_ENV: ${nodeEnv}, isProduction: ${isProduction}. Secure flag will be: ${isProduction}`);
 
     const cookieOptions = {
@@ -108,16 +108,28 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
 
         if (userDocSnap.exists()) {
             const firestoreData = userDocSnap.data();
+            console.log('[loginUser] Firestore data received:', firestoreData);
+            console.log('[loginUser] Firestore data role:', firestoreData.role);
+
+            if (!firestoreData.role) {
+                console.error('[loginUser] CRITICAL: User role not found in Firestore for user:', firebaseUser.uid);
+                // Decide how to handle this: assign a default, or prevent login.
+                // For now, let's prevent login to highlight the data issue.
+                await firebaseSignOut(auth); 
+                return { success: false, message: 'User profile is incomplete (missing role). Please contact support.' };
+            }
+
             const userProfile: UserProfile = {
                 id: firebaseUser.uid,
                 name: firestoreData.name,
                 email: firestoreData.email,
-                role: firestoreData.role,
+                role: firestoreData.role as 'customer' | 'staff' | 'admin', // Ensure cast if necessary
                 phone: firestoreData.phone,
                 createdAt: (firestoreData.createdAt instanceof Timestamp ? firestoreData.createdAt.toDate() : firestoreData.createdAt)?.toISOString(),
                 updatedAt: (firestoreData.updatedAt instanceof Timestamp ? firestoreData.updatedAt.toDate() : firestoreData.updatedAt)?.toISOString(),
             };
-
+            
+            console.log('[loginUser] UserProfile object to be set in cookie:', userProfile);
             await setSessionCookie(userProfile); 
             console.log('[loginUser] Server Action: Firebase Login successful, session set for:', userProfile.email);
             
@@ -180,7 +192,7 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
             const firestoreDocumentData = {
                 name: validatedData.name,
                 email: firebaseUser.email!,
-                role: 'customer' as 'customer' | 'staff' | 'admin',
+                role: 'customer' as 'customer' | 'staff' | 'admin', // Default role
                 phone: undefined, 
                 createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp(),
@@ -191,12 +203,13 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
                 id: firebaseUser.uid,
                 name: validatedData.name,
                 email: firebaseUser.email!,
-                role: 'customer',
+                role: 'customer', // Ensure this matches the type
                 phone: undefined,
                 createdAt: now.toISOString(), 
                 updatedAt: now.toISOString(), 
             };
-
+            
+            console.log('[registerUser] UserProfile object to be set in cookie:', userProfileForSession);
             await setSessionCookie(userProfileForSession);
             console.log('[registerUser] Server Action: Firebase Registration successful, session set for:', userProfileForSession.email);
             
@@ -299,9 +312,6 @@ export async function getUserSession(): Promise<UserProfile | null> {
 
     if (!sessionCookie.value) {
         console.log('[getUserSession] "session" cookie found, but its value is empty or undefined.');
-        // It's good practice to delete an empty/invalid cookie if found.
-        // However, let's be cautious to avoid delete loops if something is misconfigured.
-        // For now, just log and return null. If this log appears, investigate why it's empty.
         return null;
     }
     console.log('[getUserSession] "session" cookie found. Value (first 100 chars):', sessionCookie.value.substring(0,100) + "...");
@@ -315,13 +325,13 @@ export async function getUserSession(): Promise<UserProfile | null> {
                 id: sessionData.userId, 
                 name: sessionData.name || 'User', 
                 email: sessionData.email, 
-                role: sessionData.role,
+                role: sessionData.role, // This is critical
                 phone: sessionData.phone || undefined, 
             };
-            console.log('[getUserSession] Session valid and parsed. Returning user profile for:', userProfile.email);
+            console.log('[getUserSession] Session valid and parsed. User role from cookie:', userProfile.role, 'Returning user profile for:', userProfile.email);
             return userProfile;
         }
-        console.warn('[getUserSession] Parsed session data is malformed or missing required fields. Data (first 100 chars):', JSON.stringify(sessionData).substring(0,100) + "...");
+        console.warn('[getUserSession] Parsed session data is malformed or missing required fields (userId, email, role, loggedInAt). Data (first 100 chars):', JSON.stringify(sessionData).substring(0,100) + "...");
         return null;
     } catch (error) {
         console.error('[getUserSession] Error parsing "session" cookie JSON:', error, "Cookie value (first 100 chars):", sessionCookie.value.substring(0,100) + "...");
