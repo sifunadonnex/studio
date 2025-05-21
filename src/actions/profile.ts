@@ -44,6 +44,12 @@ export interface ProfileResponse {
 export interface VehicleResponse extends ProfileResponse {
     vehicles?: VehicleInput[];
 }
+export interface AllUsersResponse {
+    success: boolean;
+    message: string;
+    users?: UserProfile[];
+}
+
 
 // --- Helper Function to serialize Vehicle Timestamps ---
 const serializeVehicleTimestamps = (vehicleData: any): VehicleInput => {
@@ -55,9 +61,6 @@ const serializeVehicleTimestamps = (vehicleData: any): VehicleInput => {
             serializedData.createdAt = vehicleData.createdAt.toDate().toISOString();
         } else if (typeof vehicleData.createdAt !== 'string') {
             console.warn(`[serializeVehicleTimestamps] Vehicle ${vehicleId}: 'createdAt' field is present but not a Firestore Timestamp or string. Value:`, vehicleData.createdAt, "Type:", typeof vehicleData.createdAt);
-            // Fallback: attempt to convert to Date and then ISO string if it's a recognizable date format, otherwise might need specific handling or will be passed as is.
-            // For now, we assume if it's not a Timestamp, it should ideally already be a string or be handled by Zod validation later.
-            // If VehicleInput expects a string, and this isn't one, Zod will catch it.
         }
     }
 
@@ -169,6 +172,8 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
     console.log(`Server Action (manageVehicle Firestore): Action=${input.action} for user ${userId}`, input.vehicle);
 
     try {
+        // For add/update, validate all fields except Timestamps (server will generate them)
+        // For delete, only ID is needed but VehicleSchema still applies to input.vehicle object shape
         const coreVehicleSchema = VehicleSchema.omit({ createdAt: true, updatedAt: true });
         const validatedVehicleData = coreVehicleSchema.parse(input.vehicle);
 
@@ -180,7 +185,7 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
             vehicleId = newVehicleDocRef.id;
             await setDoc(newVehicleDocRef, { 
                 ...validatedVehicleData, 
-                id: vehicleId, 
+                id: vehicleId, // Store the generated ID within the document as well
                 createdAt: serverTimestamp(), 
                 updatedAt: serverTimestamp() 
             });
@@ -202,9 +207,10 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
             return { success: false, message: "Invalid vehicle action specified." };
         }
 
+        // Fetch all vehicles again to return the updated list
         const updatedVehiclesSnap = await getDocs(query(vehiclesCollectionRef, orderBy("createdAt", "desc")));
         const updatedVehicles = updatedVehiclesSnap.docs.map(docSnap => 
-            serializeVehicleTimestamps({ id: docSnap.id, ...docSnap.data() })
+            serializeVehicleTimestamps({ id: docSnap.id, ...docSnap.data() }) // Ensure ID from snapshot is used
         );
 
         return {
@@ -253,11 +259,8 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
 
      } catch (error: any) {
          console.error('[fetchVehiclesAction] Server Action Error (fetchVehicles Firestore):', error);
-         //  If 'error' is a FirebaseError, error.code and error.message might be useful.
-         //  Example: If index is missing, FirebaseError.code is 'failed-precondition'
-         //  and message contains a link to create the index.
          let detailedMessage = 'An unexpected error occurred while fetching vehicles.';
-         if (error.code && error.message) { // Attempt to get more specific Firebase error info
+         if (error.code && error.message) { 
             detailedMessage = `Error fetching vehicles: ${error.message} (Code: ${error.code}). Check server logs for details, including any links to create Firestore indexes if needed.`;
             console.error(`[fetchVehiclesAction] Firebase Error Code: ${error.code}, Message: ${error.message}`);
          }
@@ -295,5 +298,52 @@ export async function fetchUserProfile(userId: string): Promise<UserProfile | nu
     } catch (error) {
         console.error("[fetchUserProfile] Error fetching user profile from Firestore:", error);
         return null;
+    }
+}
+
+/**
+ * Fetches all user profiles from Firestore for admin purposes.
+ * Serializes Timestamps. Requires admin privileges.
+ */
+export async function fetchAllUsersAction(): Promise<AllUsersResponse> {
+    const session = await getUserSession();
+    if (!session?.id || session.role !== 'admin') {
+        console.warn('[fetchAllUsersAction] Unauthorized attempt to fetch all users.');
+        return { success: false, message: "Unauthorized: Admin privileges required." };
+    }
+
+    console.log(`[fetchAllUsersAction] Admin ${session.id} fetching all users.`);
+    try {
+        const usersCollectionRef = collection(db, 'users');
+        // Consider adding orderBy if needed, e.g., orderBy("createdAt", "desc")
+        // This might require an index if you add it.
+        const q = query(usersCollectionRef, orderBy("name", "asc")); 
+        const usersSnap = await getDocs(q);
+        
+        console.log(`[fetchAllUsersAction] Found ${usersSnap.docs.length} users.`);
+        
+        const users = usersSnap.docs.map(docSnap => {
+            const data = docSnap.data();
+            return {
+                id: docSnap.id,
+                name: data.name || 'N/A',
+                email: data.email || 'N/A',
+                role: data.role || 'customer', // Default to customer if role is missing
+                phone: data.phone || null,
+                createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate().toISOString() : (typeof data.createdAt === 'string' ? data.createdAt : undefined),
+                updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toDate().toISOString() : (typeof data.updatedAt === 'string' ? data.updatedAt : undefined),
+            } as UserProfile;
+        });
+
+        return { success: true, message: "Users fetched successfully.", users };
+
+    } catch (error: any) {
+        console.error('[fetchAllUsersAction] Server Action Error (fetchAllUsers Firestore):', error);
+        let detailedMessage = 'An unexpected error occurred while fetching users.';
+        if (error.code && error.message) {
+            detailedMessage = `Error fetching users: ${error.message} (Code: ${error.code}). Check server logs for details, including any links to create Firestore indexes if needed.`;
+            console.error(`[fetchAllUsersAction] Firebase Error Code: ${error.code}, Message: ${error.message}`);
+        }
+        return { success: false, message: detailedMessage, users: [] };
     }
 }
