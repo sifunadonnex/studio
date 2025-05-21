@@ -61,13 +61,19 @@ export async function setSessionCookie(userData: UserProfile) {
         loggedInAt: Date.now(),
     };
     const cookieStore = await cookies();
+    const nodeEnv = process.env.NODE_ENV;
+    const isProduction = nodeEnv === 'production';
+    
+    console.log(`[setSessionCookie] NODE_ENV: ${nodeEnv}, isProduction: ${isProduction}, Secure flag will be: ${isProduction}`);
+
     cookieStore.set('session', JSON.stringify(sessionData), {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: isProduction, // Explicitly use the derived boolean
         maxAge: 60 * 60 * 24 * 7, // 1 week
         path: '/',
         sameSite: 'lax',
     });
+    console.log('[setSessionCookie] Cookie set with data:', JSON.stringify(sessionData).substring(0, 100) + "...");
 }
 
 
@@ -253,6 +259,7 @@ export async function logoutUser(): Promise<{ success: boolean }> {
         console.log('Server Action: Logging out user (Firebase and cookie)');
         const cookieStore = await cookies(); 
         cookieStore.delete('session'); 
+        console.log('[logoutUser] Session cookie deleted.');
         // No need to call firebaseSignOut(auth) here if we primarily rely on our own session cookie
         // and Firebase auth state is managed client-side or not strictly necessary for this app's auth flow once logged out.
         // If Firebase sessions were being managed on the server with Admin SDK, then server-side signout would be relevant.
@@ -276,30 +283,34 @@ export async function getUserSession(): Promise<UserProfile | null> {
         return null;
     }
 
-    console.log('[getUserSession] Session cookie found. Value:', sessionCookie.value);
+    if (!sessionCookie.value) {
+        console.log('[getUserSession] Session cookie found, but its value is empty or undefined.');
+        return null;
+    }
+    console.log('[getUserSession] Session cookie found. Value (first 100 chars):', sessionCookie.value.substring(0,100) + "...");
+
 
     try {
         const sessionData = JSON.parse(sessionCookie.value);
-        console.log('[getUserSession] Parsed session data:', sessionData);
+        // console.log('[getUserSession] Parsed session data:', sessionData); // Be cautious logging full session data
 
         if (sessionData && sessionData.userId && sessionData.email && sessionData.role && sessionData.loggedInAt) {
             const userProfile: UserProfile = { 
                 id: sessionData.userId, 
-                name: sessionData.name || 'User', // Provide a fallback for name
+                name: sessionData.name || 'User', 
                 email: sessionData.email, 
                 role: sessionData.role,
-                phone: sessionData.phone || undefined, // Ensure phone is optional
+                phone: sessionData.phone || undefined, 
             };
-            console.log('[getUserSession] Session valid. Returning user profile:', userProfile);
+            // console.log('[getUserSession] Session valid. Returning user profile:', userProfile);
             return userProfile;
         }
-        console.warn('[getUserSession] Parsed session data is malformed or missing required fields.');
-        // Do not delete cookie here; let middleware handle redirection if session is deemed invalid.
+        console.warn('[getUserSession] Parsed session data is malformed or missing required fields. Data:', JSON.stringify(sessionData).substring(0,100) + "...");
         return null;
     } catch (error) {
-        console.error('[getUserSession] Error parsing session cookie:', error);
-        // Do not delete cookie here.
+        console.error('[getUserSession] Error parsing session cookie:', error, "Cookie value (first 100 chars):", sessionCookie.value.substring(0,100) + "...");
         return null;
     }
 }
 
+    
