@@ -3,19 +3,18 @@
 
 import { z } from 'zod';
 import { db } from '@/lib/firebase/config';
-import { collection, addDoc, query, orderBy, getDocs, serverTimestamp, Timestamp, doc } from 'firebase/firestore';
+import { collection, addDoc, query, orderBy, getDocs, serverTimestamp, Timestamp, doc, getDoc } from 'firebase/firestore';
 import { getUserSession, UserProfile } from '@/actions/auth';
+import { fetchUserProfile } from './profile'; // To fetch user profile details
 
 // --- Schemas ---
 const SendMessageSchema = z.object({
   text: z.string().min(1, { message: "Message cannot be empty." }).max(1000, { message: "Message is too long." }),
-  // userId and userName will be derived from session server-side for user messages
 });
 
 const StaffSendMessageSchema = z.object({
   targetUserId: z.string().min(1, { message: "Target user ID is required."}),
   text: z.string().min(1, { message: "Message cannot be empty." }).max(1000, { message: "Message is too long." }),
-  // staffId and staffName will be derived from staff's session server-side
 });
 
 
@@ -44,6 +43,20 @@ export interface FetchChatHistoryResponse {
   messages?: ChatMessage[];
 }
 
+export interface ChatUser {
+    id: string; // User ID
+    name: string;
+    email: string;
+    // lastMessageTimestamp?: string; // Optional: For sorting or display
+}
+
+export interface FetchActiveChatUsersResponse {
+    success: boolean;
+    message: string;
+    users?: ChatUser[];
+}
+
+
 /**
  * Saves a user's message to their chat thread in Firestore.
  */
@@ -52,7 +65,7 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
   const session = await getUserSession();
 
   if (!session?.id || !session.name) {
-    console.error('[sendUserMessageAction] Authentication error: No session ID or name found. Session:', JSON.stringify(session));
+    console.error('[sendUserMessageAction] Authentication error: No session ID or name found. Session:', session);
     return { success: false, message: "Authentication required to send messages." };
   }
   console.log(`[sendUserMessageAction] User authenticated: ${session.id} (${session.name})`);
@@ -61,14 +74,12 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
     const validatedData = SendMessageSchema.parse(data);
     console.log('[sendUserMessageAction] Data validated:', validatedData);
 
-    // Messages are stored in a subcollection under the user's chat document
-    // e.g., chats/{userId}/messages/{messageId}
     const chatThreadRef = collection(db, 'chats', session.id, 'messages');
     console.log(`[sendUserMessageAction] Firestore collection path: chats/${session.id}/messages`);
     
     const messageData = {
       senderId: session.id,
-      senderName: session.name, // User's name from session
+      senderName: session.name, 
       senderType: 'user' as 'user' | 'staff',
       text: validatedData.text,
       timestamp: serverTimestamp(),
@@ -84,7 +95,7 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
         senderName: messageData.senderName,
         senderType: messageData.senderType,
         text: messageData.text,
-        timestamp: new Date().toISOString(), // Use current date for optimistic update
+        timestamp: new Date().toISOString(), 
     };
 
     return { success: true, message: "Message sent successfully.", chatMessage: savedMessageForClient };
@@ -97,24 +108,23 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
     }
     console.error('[sendUserMessageAction] Firestore or other Error saving message:', error);
     let errorMessage = 'An unexpected error occurred while sending the message.';
-    if (error.code) { 
-        errorMessage = `Error sending message: ${error.message} (Code: ${error.code})`;
-    } else if (error.message) {
+    if (error.message) { // More direct error message if available
         errorMessage = error.message;
+    } else if (error.code) { 
+        errorMessage = `Error sending message (Code: ${error.code})`;
     }
     return { success: false, message: errorMessage };
   }
 }
 
 /**
- * Fetches the chat history for a given user.
- * Called by the user on their chat page.
+ * Fetches the chat history for the currently logged-in user.
  */
 export async function fetchChatHistoryAction(): Promise<FetchChatHistoryResponse> {
   console.log('[fetchChatHistoryAction] Action initiated.');
   const session = await getUserSession();
   if (!session?.id) {
-    console.error('[fetchChatHistoryAction] Authentication error: No session ID. Session:', JSON.stringify(session));
+    console.error('[fetchChatHistoryAction] Authentication error: No session ID. Session:', session);
     return { success: false, message: "Authentication required to fetch chat history." };
   }
   console.log(`[fetchChatHistoryAction] Fetching history for user: ${session.id}`);
@@ -142,25 +152,21 @@ export async function fetchChatHistoryAction(): Promise<FetchChatHistoryResponse
 
   } catch (error: any) {
     console.error('[fetchChatHistoryAction] Error fetching chat history:', error);
-    if (error.code === 'failed-precondition' && error.message.includes('index')) {
-        const detailedMessage = `Error: Firestore query requires an index. Please create it for the 'messages' subcollection on the 'timestamp' field (ascending). Details: ${error.message}`;
-        console.error(detailedMessage);
-        return { success: false, message: detailedMessage, messages: [] };
-    }
     let errorMessage = 'An unexpected error occurred while fetching chat history.';
-    if (error.code) { 
-        errorMessage = `Error fetching history: ${error.message} (Code: ${error.code})`;
+    if (error.code === 'failed-precondition' && error.message && error.message.includes('index')) {
+        errorMessage = `Error: Firestore query requires an index. Please create it for the 'messages' subcollection on the 'timestamp' field (ascending). Details: ${error.message}`;
     } else if (error.message) {
         errorMessage = error.message;
+    } else if (error.code) { 
+        errorMessage = `Error fetching history (Code: ${error.code})`;
     }
     return { success: false, message: errorMessage, messages: [] };
   }
 }
 
+
 /**
- * @fileOverview Server action for staff members to send messages to users.
- * This action would be called from a dedicated staff/admin chat interface (not yet built).
- * It requires the staff member to be authenticated and have appropriate permissions.
+ * Saves a staff member's message to a user's chat thread in Firestore.
  */
 export async function sendStaffMessageAction(data: StaffSendMessageInput): Promise<ChatResponse> {
   console.log('[sendStaffMessageAction] Action initiated by staff. Data received:', data);
@@ -171,7 +177,6 @@ export async function sendStaffMessageAction(data: StaffSendMessageInput): Promi
     return { success: false, message: "Staff authentication required." };
   }
 
-  // Role check: Ensure the sender is 'staff' or 'admin'
   if (staffSession.role !== 'staff' && staffSession.role !== 'admin') {
     console.error(`[sendStaffMessageAction] Authorization error: User ${staffSession.id} (${staffSession.role}) is not authorized to send staff messages.`);
     return { success: false, message: "Unauthorized to send staff messages." };
@@ -183,13 +188,12 @@ export async function sendStaffMessageAction(data: StaffSendMessageInput): Promi
     const validatedData = StaffSendMessageSchema.parse(data);
     console.log('[sendStaffMessageAction] Data validated:', validatedData);
 
-    // Staff sends a message to a specific user's chat thread
     const chatThreadRef = collection(db, 'chats', validatedData.targetUserId, 'messages');
     console.log(`[sendStaffMessageAction] Firestore collection path: chats/${validatedData.targetUserId}/messages`);
     
     const messageData = {
-      senderId: staffSession.id, // Staff's own user ID
-      senderName: staffSession.name, // Staff's name
+      senderId: staffSession.id, 
+      senderName: staffSession.name, 
       senderType: 'staff' as 'user' | 'staff',
       text: validatedData.text,
       timestamp: serverTimestamp(),
@@ -207,13 +211,9 @@ export async function sendStaffMessageAction(data: StaffSendMessageInput): Promi
         text: messageData.text,
         timestamp: new Date().toISOString(), 
     };
-
-    // Note: This response is for the staff member's action.
-    // The target user would see this message through their regular fetchChatHistoryAction or real-time listeners (if implemented).
     return { success: true, message: `Message sent to user ${validatedData.targetUserId}.`, chatMessage: savedMessageForClient };
 
-  } catch (error: any)
-{
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
       const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
       console.error('[sendStaffMessageAction] Validation Error:', messages);
@@ -221,11 +221,110 @@ export async function sendStaffMessageAction(data: StaffSendMessageInput): Promi
     }
     console.error('[sendStaffMessageAction] Firestore or other Error saving staff message:', error);
     let errorMessage = 'An unexpected error occurred while sending the staff message.';
-    if (error.code) { 
-        errorMessage = `Error sending message: ${error.message} (Code: ${error.code})`;
-    } else if (error.message) {
+     if (error.message) {
         errorMessage = error.message;
+    } else if (error.code) { 
+        errorMessage = `Error sending message (Code: ${error.code})`;
     }
     return { success: false, message: errorMessage };
   }
 }
+
+/**
+ * Fetches a list of users who have active chat threads.
+ * For staff/admin interface.
+ */
+export async function getActiveChatUsersAction(): Promise<FetchActiveChatUsersResponse> {
+    console.log('[getActiveChatUsersAction] Action initiated.');
+    const staffSession = await getUserSession();
+
+    if (!staffSession || (staffSession.role !== 'staff' && staffSession.role !== 'admin')) {
+        console.error('[getActiveChatUsersAction] Unauthorized attempt.');
+        return { success: false, message: "Unauthorized: Staff or admin privileges required." };
+    }
+    console.log(`[getActiveChatUsersAction] Staff/Admin ${staffSession.id} fetching active chat users.`);
+
+    try {
+        const chatsCollectionRef = collection(db, 'chats');
+        const chatDocsSnapshot = await getDocs(chatsCollectionRef);
+        
+        const userChatPromises = chatDocsSnapshot.docs.map(async (chatDoc) => {
+            const userId = chatDoc.id;
+            const userProfile = await fetchUserProfile(userId); // Use existing helper
+            if (userProfile) {
+                return {
+                    id: userProfile.id,
+                    name: userProfile.name,
+                    email: userProfile.email,
+                } as ChatUser;
+            }
+            return null;
+        });
+
+        const chatUsers = (await Promise.all(userChatPromises)).filter(user => user !== null) as ChatUser[];
+        
+        console.log(`[getActiveChatUsersAction] Found ${chatUsers.length} active chat users.`);
+        return { success: true, message: "Active chat users fetched.", users: chatUsers };
+
+    } catch (error: any) {
+        console.error('[getActiveChatUsersAction] Error fetching active chat users:', error);
+        let errorMessage = 'An unexpected error occurred while fetching chat users.';
+        if (error.message) errorMessage = error.message;
+        else if (error.code) errorMessage = `Error (Code: ${error.code})`;
+        return { success: false, message: errorMessage, users: [] };
+    }
+}
+
+
+/**
+ * Fetches the chat history for a specific user, callable by staff.
+ */
+export async function fetchMessagesForUserByStaffAction(targetUserId: string): Promise<FetchChatHistoryResponse> {
+    console.log(`[fetchMessagesForUserByStaffAction] Action initiated for targetUserId: ${targetUserId}`);
+    const staffSession = await getUserSession();
+
+    if (!staffSession || (staffSession.role !== 'staff' && staffSession.role !== 'admin')) {
+        console.error('[fetchMessagesForUserByStaffAction] Unauthorized attempt.');
+        return { success: false, message: "Unauthorized: Staff or admin privileges required." };
+    }
+    console.log(`[fetchMessagesForUserByStaffAction] Staff/Admin ${staffSession.id} fetching messages for user ${targetUserId}.`);
+    
+    if (!targetUserId) {
+        return { success: false, message: "Target user ID is required." };
+    }
+
+    try {
+        const messagesCollectionRef = collection(db, 'chats', targetUserId, 'messages');
+        const q = query(messagesCollectionRef, orderBy("timestamp", "asc"));
+        console.log(`[fetchMessagesForUserByStaffAction] Querying Firestore path: chats/${targetUserId}/messages`);
+
+        const querySnapshot = await getDocs(q);
+        console.log(`[fetchMessagesForUserByStaffAction] Fetched ${querySnapshot.docs.length} messages for user ${targetUserId}.`);
+        const chatMessages: ChatMessage[] = querySnapshot.docs.map(docSnap => {
+            const data = docSnap.data();
+            return {
+                id: docSnap.id,
+                senderId: data.senderId,
+                senderName: data.senderName,
+                senderType: data.senderType as 'user' | 'staff',
+                text: data.text,
+                timestamp: data.timestamp instanceof Timestamp ? data.timestamp.toDate().toISOString() : new Date(0).toISOString(),
+            } as ChatMessage;
+        });
+
+        return { success: true, message: "Chat history fetched successfully.", messages: chatMessages };
+
+    } catch (error: any) {
+        console.error(`[fetchMessagesForUserByStaffAction] Error fetching chat history for user ${targetUserId}:`, error);
+        let errorMessage = 'An unexpected error occurred.';
+        if (error.code === 'failed-precondition' && error.message && error.message.includes('index')) {
+            errorMessage = `Error: Firestore query requires an index for 'messages' on 'timestamp' (ascending). Details: ${error.message}`;
+        } else if (error.message) {
+            errorMessage = error.message;
+        } else if (error.code) {
+            errorMessage = `Error (Code: ${error.code})`;
+        }
+        return { success: false, message: errorMessage, messages: [] };
+    }
+}
+
