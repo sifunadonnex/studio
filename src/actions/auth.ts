@@ -113,8 +113,6 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
 
             if (!firestoreData.role) {
                 console.error('[loginUser] CRITICAL: User role not found in Firestore for user:', firebaseUser.uid);
-                // Decide how to handle this: assign a default, or prevent login.
-                // For now, let's prevent login to highlight the data issue.
                 await firebaseSignOut(auth); 
                 return { success: false, message: 'User profile is incomplete (missing role). Please contact support.' };
             }
@@ -123,7 +121,7 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
                 id: firebaseUser.uid,
                 name: firestoreData.name,
                 email: firestoreData.email,
-                role: firestoreData.role as 'customer' | 'staff' | 'admin', // Ensure cast if necessary
+                role: firestoreData.role as 'customer' | 'staff' | 'admin', 
                 phone: firestoreData.phone,
                 createdAt: (firestoreData.createdAt instanceof Timestamp ? firestoreData.createdAt.toDate() : firestoreData.createdAt)?.toISOString(),
                 updatedAt: (firestoreData.updatedAt instanceof Timestamp ? firestoreData.updatedAt.toDate() : firestoreData.updatedAt)?.toISOString(),
@@ -187,38 +185,44 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
         const userCredential = await createUserWithEmailAndPassword(auth, validatedData.email, validatedData.password);
         const firebaseUser = userCredential.user;
 
-        if (firebaseUser) {
-            const now = new Date();
-            const firestoreDocumentData = {
-                name: validatedData.name,
-                email: firebaseUser.email!,
-                role: 'customer' as 'customer' | 'staff' | 'admin', // Default role
-                phone: undefined, 
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-            };
-            await setDoc(doc(db, 'users', firebaseUser.uid), firestoreDocumentData);
-
-            const userProfileForSession: UserProfile = {
-                id: firebaseUser.uid,
-                name: validatedData.name,
-                email: firebaseUser.email!,
-                role: 'customer', // Ensure this matches the type
-                phone: undefined,
-                createdAt: now.toISOString(), 
-                updatedAt: now.toISOString(), 
-            };
-            
-            console.log('[registerUser] UserProfile object to be set in cookie:', userProfileForSession);
-            await setSessionCookie(userProfileForSession);
-            console.log('[registerUser] Server Action: Firebase Registration successful, session set for:', userProfileForSession.email);
-            
-            console.log('[registerUser] Redirecting to /dashboard');
-            redirect('/dashboard'); 
-
-        } else {
-             return { success: false, message: 'Firebase registration failed unexpectedly.' };
+        if (!firebaseUser || !firebaseUser.email) {
+            console.error('[registerUser] Firebase user created successfully, but user object or email is missing. This should not happen.');
+            // Attempt to sign out the partially created user to avoid orphaned accounts if possible.
+            if (firebaseUser) await firebaseSignOut(auth);
+            return { success: false, message: 'Registration process failed due to incomplete user data from authentication provider.' };
         }
+        
+        const now = new Date();
+        const firestoreDocumentData = {
+            name: validatedData.name,
+            email: firebaseUser.email, // Safe to use now after the check
+            role: 'customer' as 'customer' | 'staff' | 'admin', // Default role
+            phone: undefined, 
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+        };
+        
+        console.log('[registerUser] Attempting to write to Firestore for user:', firebaseUser.uid, 'with data:', firestoreDocumentData);
+        await setDoc(doc(db, 'users', firebaseUser.uid), firestoreDocumentData);
+        console.log('[registerUser] Firestore document created successfully for user:', firebaseUser.uid);
+
+        const userProfileForSession: UserProfile = {
+            id: firebaseUser.uid,
+            name: validatedData.name,
+            email: firebaseUser.email, // Safe to use now
+            role: 'customer', 
+            phone: undefined,
+            createdAt: now.toISOString(), 
+            updatedAt: now.toISOString(), 
+        };
+        
+        console.log('[registerUser] UserProfile object to be set in cookie:', userProfileForSession);
+        await setSessionCookie(userProfileForSession);
+        console.log('[registerUser] Server Action: Firebase Registration successful, session set for:', userProfileForSession.email);
+        
+        console.log('[registerUser] Redirecting to /dashboard');
+        redirect('/dashboard'); 
+
     } catch (error: any) {
          if (error instanceof z.ZodError) {
             const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
@@ -228,9 +232,10 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
             console.log('[registerUser] Caught redirect error, re-throwing.');
             throw error; 
         }
+
         console.error('[registerUser] Server Action Error (registerUser Firebase):', error);
         let message = 'An unexpected error occurred during registration.';
-        if (error.code) {
+        if (error.code) { // Firebase Auth specific error codes
             switch (error.code) {
                 case 'auth/email-already-in-use':
                     message = 'An account with this email already exists.';
@@ -241,10 +246,14 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
                 case 'auth/weak-password':
                     message = 'Password is too weak. Please choose a stronger password.';
                     break;
-                default:
-                    message = 'Registration failed. Please try again.';
+                default: // Other Firebase Auth errors
+                    message = `Registration error: ${error.message || 'Please try again.'} (Auth Code: ${error.code})`;
             }
+        } else if (error.message) { // For non-Firebase Auth errors (e.g., Firestore, cookie setting)
+             message = `Registration process failed: ${error.message}`;
         }
+        // If it's a Firestore permission error, error.message might contain "PERMISSION_DENIED"
+        // You could add more specific checks here if needed, e.g., if (error.message.includes('PERMISSION_DENIED')) { ... }
         return { success: false, message };
     }
 }
@@ -271,6 +280,7 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
         if (error.code === 'auth/invalid-email') {
              return { success: false, message: 'Invalid email format.' };
         }
+        // For security reasons, even if user not found, present a generic success message.
         return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
     }
 }
@@ -285,6 +295,8 @@ export async function logoutUser(): Promise<{ success: boolean }> {
         console.log('[logoutUser] Deleting "session" cookie.');
         cookieStore.delete('session'); 
         console.log('[logoutUser] Session cookie deleted from store.');
+        // No need to call firebaseSignOut(auth) here if we are only relying on the cookie for session state.
+        // If you also maintain Firebase client-side auth state and want to clear it, you would do it on the client.
         return { success: true };
     } catch (error) {
         console.error('[logoutUser] Server Action Error (logoutUser):', error);
@@ -299,7 +311,6 @@ export async function getUserSession(): Promise<UserProfile | null> {
     console.log('[getUserSession] Attempting to get session cookie...');
     const cookieStore = await cookies();
     
-    // Log all cookies available to the server for this request
     const allCookies = cookieStore.getAll();
     console.log('[getUserSession] All cookies available to server on this request:', JSON.stringify(allCookies.map(c => ({ name: c.name, value: c.value.substring(0,30) + "..."}))));
 
@@ -318,14 +329,13 @@ export async function getUserSession(): Promise<UserProfile | null> {
 
     try {
         const sessionData = JSON.parse(sessionCookie.value);
-        // console.log('[getUserSession] Parsed session data (first 100 chars):', JSON.stringify(sessionData).substring(0,100) + "...");
 
         if (sessionData && sessionData.userId && sessionData.email && sessionData.role && sessionData.loggedInAt) {
             const userProfile: UserProfile = { 
                 id: sessionData.userId, 
                 name: sessionData.name || 'User', 
                 email: sessionData.email, 
-                role: sessionData.role, // This is critical
+                role: sessionData.role, 
                 phone: sessionData.phone || undefined, 
             };
             console.log('[getUserSession] Session valid and parsed. User role from cookie:', userProfile.role, 'Returning user profile for:', userProfile.email);
@@ -341,3 +351,4 @@ export async function getUserSession(): Promise<UserProfile | null> {
     
 
     
+
