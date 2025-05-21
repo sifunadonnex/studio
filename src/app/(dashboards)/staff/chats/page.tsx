@@ -5,7 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Send, User, MessageSquareText, Loader2, AlertTriangle, Users, MessagesSquare, Wrench } from 'lucide-react';
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from '@/hooks/use-toast';
@@ -14,15 +14,15 @@ import { useUserSession } from '@/contexts/session-context';
 import { 
     sendStaffMessageAction, 
     getActiveChatUsersAction,
-    fetchMessagesForUserByStaffAction,
     ChatMessage, 
     ChatUser,
     ChatResponse,
-    FetchChatHistoryResponse,
     FetchActiveChatUsersResponse,
     StaffSendMessageInput
 } from '@/actions/chat';
 import { formatDistanceToNow } from 'date-fns';
+import { db } from '@/lib/firebase/config';
+import { collection, query, orderBy, onSnapshot, Timestamp, Unsubscribe } from 'firebase/firestore';
 
 export default function StaffChatsPage() {
     const { toast } = useToast();
@@ -39,15 +39,16 @@ export default function StaffChatsPage() {
     const [error, setError] = useState<string | null>(null);
     
     const messagesScrollAreaRef = useRef<HTMLDivElement>(null);
+    const messagesListenerUnsubscribe = useRef<Unsubscribe | null>(null);
 
-    const scrollToBottom = () => {
+    const scrollToBottom = useCallback(() => {
         if (messagesScrollAreaRef.current) {
              const viewport = messagesScrollAreaRef.current.querySelector<HTMLDivElement>('[data-radix-scroll-area-viewport]');
              if (viewport) {
                  viewport.scrollTop = viewport.scrollHeight;
              }
         }
-    };
+    }, []);
 
     const loadActiveChatUsers = useCallback(async () => {
         if (!staffProfile || (staffProfile.role !== 'staff' && staffProfile.role !== 'admin')) {
@@ -80,67 +81,94 @@ export default function StaffChatsPage() {
         }
     }, [sessionLoading, staffProfile, loadActiveChatUsers]);
 
-    const loadMessagesForUser = useCallback(async (userId: string) => {
-        setSelectedUserId(userId);
+    useEffect(() => {
+        // Cleanup previous listener if selectedUserId changes
+        if (messagesListenerUnsubscribe.current) {
+            console.log(`[StaffChatPage] Unsubscribing from messages for user ${selectedUserId} due to selection change.`);
+            messagesListenerUnsubscribe.current();
+            messagesListenerUnsubscribe.current = null;
+        }
+
+        if (!selectedUserId) {
+            setCurrentMessages([]);
+            setLoadingMessages(false);
+            return;
+        }
+
         setLoadingMessages(true);
-        setCurrentMessages([]);
+        setCurrentMessages([]); // Clear previous messages
         setError(null);
-        try {
-            const result: FetchChatHistoryResponse = await fetchMessagesForUserByStaffAction(userId);
-            if (result.success && result.messages) {
-                setCurrentMessages(result.messages);
-            } else {
-                setError(result.message || `Failed to load messages for ${userId}.`);
-                toast({ title: "Error Loading Messages", description: result.message, variant: "destructive" });
-            }
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "An unexpected error occurred.";
+
+        const messagesCollectionRef = collection(db, 'chats', selectedUserId, 'messages');
+        const q = query(messagesCollectionRef, orderBy("timestamp", "asc"));
+
+        const unsubscribe = onSnapshot(q, (querySnapshot) => {
+            console.log(`[StaffChatPage] onSnapshot: Received ${querySnapshot.docs.length} messages for selected user ${selectedUserId}`);
+            const chatMessages: ChatMessage[] = querySnapshot.docs.map(docSnap => {
+                const data = docSnap.data();
+                return {
+                    id: docSnap.id,
+                    senderId: data.senderId,
+                    senderName: data.senderName,
+                    senderType: data.senderType as 'user' | 'staff',
+                    text: data.text,
+                    timestamp: data.timestamp instanceof Timestamp ? data.timestamp.toDate().toISOString() : new Date(0).toISOString(),
+                } as ChatMessage;
+            });
+            setCurrentMessages(chatMessages);
+            setLoadingMessages(false);
+            scrollToBottom();
+        }, (err) => {
+            console.error(`[StaffChatPage] onSnapshot error for user ${selectedUserId}:`, err);
+            const message = err instanceof Error ? err.message : "An unexpected error occurred while fetching messages.";
             setError(message);
             toast({ title: "Load Messages Error", description: message, variant: "destructive" });
-        } finally {
             setLoadingMessages(false);
-        }
-    }, [toast]);
+        });
+
+        messagesListenerUnsubscribe.current = unsubscribe;
+
+        // Cleanup listener on component unmount
+        return () => {
+            if (messagesListenerUnsubscribe.current) {
+                console.log(`[StaffChatPage] Unsubscribing from messages for user ${selectedUserId} on component unmount.`);
+                messagesListenerUnsubscribe.current();
+            }
+        };
+    }, [selectedUserId, toast, scrollToBottom]);
+
 
     useEffect(() => {
-        scrollToBottom();
-    }, [currentMessages]);
+        if (currentMessages.length > 0) {
+          setTimeout(scrollToBottom, 100);
+        }
+    }, [currentMessages, scrollToBottom]);
 
     const handleSendMessage = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newMessage.trim() || !selectedUserId || !staffProfile) return;
 
         setSendingMessage(true);
-        const optimisticMessage: ChatMessage = {
-            id: `temp-staff-${Date.now()}`,
-            senderId: staffProfile.id,
-            senderName: staffProfile.name || 'Staff',
-            senderType: 'staff',
-            text: newMessage,
-            timestamp: new Date().toISOString(),
-        };
-        setCurrentMessages(prev => [...prev, optimisticMessage]);
-        const messageToSend = newMessage;
+        const messageTextToSend = newMessage;
         setNewMessage('');
-        scrollToBottom();
+        // scrollToBottom(); // onSnapshot will handle this
 
-        const messageData: StaffSendMessageInput = { targetUserId: selectedUserId, text: messageToSend };
+        const messageData: StaffSendMessageInput = { targetUserId: selectedUserId, text: messageTextToSend };
 
         try {
             const result: ChatResponse = await sendStaffMessageAction(messageData);
-            if (result.success && result.chatMessage) {
-                setCurrentMessages(prev => prev.map(msg => msg.id === optimisticMessage.id ? result.chatMessage! : msg));
-            } else {
+            if (!result.success) {
                 toast({ title: "Message Failed", description: result.message, variant: "destructive" });
-                setCurrentMessages(prev => prev.filter(m => m.id !== optimisticMessage.id));
+                setNewMessage(messageTextToSend);
             }
+            // No need to manually add to state, onSnapshot handles it
         } catch (err) {
             const message = err instanceof Error ? err.message : "Could not send message.";
             toast({ title: "Error", description: message, variant: "destructive" });
-            setCurrentMessages(prev => prev.filter(m => m.id !== optimisticMessage.id));
+            setNewMessage(messageTextToSend);
         } finally {
             setSendingMessage(false);
-            scrollToBottom();
+            // scrollToBottom(); // onSnapshot will handle this
         }
     };
     
@@ -152,7 +180,7 @@ export default function StaffChatsPage() {
         }
     };
 
-    if (sessionLoading) {
+    if (sessionLoading && !staffProfile) {
         return (
             <div className="flex flex-col h-full items-center justify-center">
                 <Loader2 className="h-12 w-12 animate-spin text-primary" />
@@ -196,7 +224,7 @@ export default function StaffChatsPage() {
                                             key={user.id}
                                             variant={selectedUserId === user.id ? "secondary" : "ghost"}
                                             className="w-full justify-start h-auto py-2 px-3 text-left"
-                                            onClick={() => loadMessagesForUser(user.id)}
+                                            onClick={() => setSelectedUserId(user.id)}
                                         >
                                             <div>
                                                 <p className="font-medium text-sm">{user.name}</p>
@@ -221,22 +249,22 @@ export default function StaffChatsPage() {
                         <>
                             <CardHeader className="border-b">
                                 <CardTitle>Conversation with {activeChatUsers.find(u => u.id === selectedUserId)?.name || 'User'}</CardTitle>
-                                <CardDescription>Responding as {staffProfile.name} (Staff)</CardDescription>
+                                <CardDescription>Responding as {staffProfile.name} ({staffProfile.role})</CardDescription>
                             </CardHeader>
                             <CardContent className="flex-grow p-0 overflow-hidden">
-                                <ScrollArea className="h-full p-4" ref={messagesScrollAreaRef}>
-                                    {loadingMessages ? (
+                                <ScrollArea className="h-full p-4" ref={messagesScrollAreaRef} data-testid="staff-chat-scroll-area">
+                                    {loadingMessages && currentMessages.length === 0 ? (
                                         <div className="flex flex-col items-center justify-center h-full">
                                             <Loader2 className="h-8 w-8 animate-spin text-primary" />
                                             <p className="mt-2 text-sm text-muted-foreground">Loading messages...</p>
                                         </div>
-                                    ) : error && !loadingMessages ? (
+                                    ) : error && !loadingMessages && currentMessages.length === 0 ? (
                                         <div className="flex flex-col items-center justify-center h-full p-4 text-center">
                                             <AlertTriangle className="h-8 w-8 text-destructive mb-2" />
                                             <p className="text-destructive font-medium">Error loading messages</p>
                                             <p className="text-muted-foreground text-xs mb-3">{error}</p>
                                         </div>
-                                    ): currentMessages.length === 0 ? (
+                                    ): currentMessages.length === 0 && !loadingMessages ? (
                                         <div className="flex flex-col items-center justify-center h-full text-center">
                                             <MessagesSquare className="h-10 w-10 text-muted-foreground mb-3" />
                                             <p className="text-sm text-muted-foreground">No messages in this conversation yet.</p>
@@ -269,7 +297,7 @@ export default function StaffChatsPage() {
                                                             {formatTimestamp(message.timestamp)} by {message.senderName}
                                                         </p>
                                                     </div>
-                                                    {message.senderType === 'staff' && (
+                                                    {message.senderType === 'staff' && staffProfile && (
                                                         <Avatar className="h-8 w-8">
                                                             <AvatarFallback><Wrench className="h-4 w-4" /></AvatarFallback>
                                                         </Avatar>

@@ -5,16 +5,17 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Send, User, Wrench, MessageSquare, Loader2, AlertTriangle } from 'lucide-react';
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { useUserSession } from '@/contexts/session-context';
-import { sendUserMessageAction, fetchChatHistoryAction, SendMessageInput, ChatMessage, ChatResponse, FetchChatHistoryResponse } from '@/actions/chat';
+import { sendUserMessageAction, SendMessageInput, ChatMessage, ChatResponse } from '@/actions/chat';
 import { formatDistanceToNow } from 'date-fns';
 import Link from 'next/link';
-
+import { db } from '@/lib/firebase/config';
+import { collection, query, orderBy, onSnapshot, Timestamp, Unsubscribe } from 'firebase/firestore';
 
 export default function ChatPage() {
     const { toast } = useToast();
@@ -26,89 +27,94 @@ export default function ChatPage() {
     const [error, setError] = useState<string | null>(null);
     const scrollAreaRef = useRef<HTMLDivElement>(null);
 
-    const scrollToBottom = () => {
+    const scrollToBottom = useCallback(() => {
         if (scrollAreaRef.current) {
              const viewport = scrollAreaRef.current.querySelector<HTMLDivElement>('[data-radix-scroll-area-viewport]');
              if (viewport) {
                  viewport.scrollTop = viewport.scrollHeight;
              }
         }
-    };
+    }, []);
 
-    const loadChatHistory = useCallback(async () => {
-        if (!userProfile?.id) {
+    useEffect(() => {
+        if (sessionLoading || !userProfile?.id) {
             setLoadingHistory(false);
+            setMessages([]); // Clear messages if no user or session is loading
             return;
         }
+
         setLoadingHistory(true);
         setError(null);
-        try {
-            const result: FetchChatHistoryResponse = await fetchChatHistoryAction();
-            if (result.success && result.messages) {
-                setMessages(result.messages);
-            } else {
-                setError(result.message || "Failed to load chat history.");
-                toast({ title: "Error Loading Chat", description: result.message, variant: "destructive" });
-            }
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "An unexpected error occurred.";
+
+        const messagesCollectionRef = collection(db, 'chats', userProfile.id, 'messages');
+        const q = query(messagesCollectionRef, orderBy("timestamp", "asc"));
+
+        const unsubscribe: Unsubscribe = onSnapshot(q, (querySnapshot) => {
+            console.log(`[ChatPage] onSnapshot: Received ${querySnapshot.docs.length} messages for user ${userProfile.id}`);
+            const chatMessages: ChatMessage[] = querySnapshot.docs.map(docSnap => {
+                const data = docSnap.data();
+                return {
+                    id: docSnap.id,
+                    senderId: data.senderId,
+                    senderName: data.senderName,
+                    senderType: data.senderType as 'user' | 'staff',
+                    text: data.text,
+                    timestamp: data.timestamp instanceof Timestamp ? data.timestamp.toDate().toISOString() : new Date(0).toISOString(),
+                } as ChatMessage;
+            });
+            setMessages(chatMessages);
+            setLoadingHistory(false);
+            scrollToBottom();
+        }, (err) => {
+            console.error("[ChatPage] onSnapshot error:", err);
+            const message = err instanceof Error ? err.message : "An unexpected error occurred while fetching messages.";
             setError(message);
             toast({ title: "Chat Error", description: message, variant: "destructive" });
-        } finally {
             setLoadingHistory(false);
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [userProfile?.id, toast]); // toast is stable, userProfile.id is key
+        });
+
+        // Cleanup listener on component unmount or when userProfile.id changes
+        return () => {
+            console.log(`[ChatPage] Unsubscribing from chat messages for user ${userProfile.id}`);
+            unsubscribe();
+        };
+    }, [sessionLoading, userProfile, toast, scrollToBottom]);
+
 
     useEffect(() => {
-        if (!sessionLoading && userProfile) {
-            loadChatHistory();
-        } else if (!sessionLoading && !userProfile) {
-            setLoadingHistory(false);
-            setMessages([]); // Clear messages if user logs out
+        // Scroll to bottom whenever messages state updates, but after a slight delay to allow DOM update
+        if (messages.length > 0) {
+            setTimeout(scrollToBottom, 100);
         }
-    }, [sessionLoading, userProfile, loadChatHistory]);
-
-    useEffect(() => {
-        scrollToBottom();
-    }, [messages]);
+    }, [messages, scrollToBottom]);
 
     const handleSendMessage = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newMessage.trim() || !userProfile) return;
 
         setSendingMessage(true);
-        const optimisticMessage: ChatMessage = {
-            id: `temp-${Date.now()}`,
-            senderId: userProfile.id,
-            senderName: userProfile.name || 'You',
-            senderType: 'user',
-            text: newMessage,
-            timestamp: new Date().toISOString(),
-        };
-        setMessages(prev => [...prev, optimisticMessage]);
+        // Optimistic update is handled by onSnapshot, but we can clear input
+        const messageTextToSend = newMessage;
         setNewMessage('');
-        scrollToBottom();
+        // scrollToBottom(); // onSnapshot will trigger this
 
-        const messageData: SendMessageInput = { text: newMessage };
+        const messageData: SendMessageInput = { text: messageTextToSend };
 
         try {
             const result: ChatResponse = await sendUserMessageAction(messageData);
-            if (result.success && result.chatMessage) {
-                // Replace optimistic message with confirmed message from server
-                setMessages(prev => prev.map(msg => msg.id === optimisticMessage.id ? result.chatMessage! : msg));
-            } else {
+            if (!result.success) {
                 toast({ title: "Message Failed", description: result.message, variant: "destructive" });
-                // Remove optimistic message if sending failed
-                setMessages(prev => prev.filter(m => m.id !== optimisticMessage.id));
+                // Optionally, re-add newMessage to input if sending failed
+                setNewMessage(messageTextToSend);
             }
+            // No need to manually add message to state, onSnapshot will handle it
         } catch (err) {
             const message = err instanceof Error ? err.message : "Could not send message.";
             toast({ title: "Error", description: message, variant: "destructive" });
-            setMessages(prev => prev.filter(m => m.id !== optimisticMessage.id));
+            setNewMessage(messageTextToSend); // Re-add message to input on error
         } finally {
             setSendingMessage(false);
-            scrollToBottom();
+            // scrollToBottom(); // onSnapshot will trigger this
         }
     };
     
@@ -120,7 +126,7 @@ export default function ChatPage() {
         }
     };
 
-    if (sessionLoading) {
+    if (sessionLoading && !userProfile) { // Show loading only if userProfile is not yet available
         return (
             <div className="flex flex-col h-[calc(100vh-10rem)] md:h-[calc(100vh-8rem)] items-center justify-center">
                 <Loader2 className="h-12 w-12 animate-spin text-primary" />
@@ -129,7 +135,7 @@ export default function ChatPage() {
         );
     }
     
-    if (!userProfile) {
+    if (!userProfile && !sessionLoading) { // Session loaded, but no user
          return (
             <div className="flex flex-col h-[calc(100vh-10rem)] md:h-[calc(100vh-8rem)] items-center justify-center text-center p-4">
                 <MessageSquare className="h-16 w-16 text-muted-foreground mb-4" />
@@ -152,8 +158,8 @@ export default function ChatPage() {
         </CardHeader>
 
         <CardContent className="flex-grow p-0 overflow-hidden">
-          <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
-            {loadingHistory ? (
+          <ScrollArea className="h-full p-4" ref={scrollAreaRef} data-testid="chat-scroll-area">
+            {loadingHistory && messages.length === 0 ? ( // Show loading only if messages are empty
                  <div className="flex flex-col items-center justify-center h-full">
                     <Loader2 className="h-10 w-10 animate-spin text-primary" />
                     <p className="mt-2 text-muted-foreground">Loading chat history...</p>
@@ -163,9 +169,9 @@ export default function ChatPage() {
                     <AlertTriangle className="h-10 w-10 text-destructive mb-2" />
                     <p className="text-destructive font-medium">Error loading chat</p>
                     <p className="text-muted-foreground text-sm mb-3">{error}</p>
-                    <Button variant="outline" onClick={loadChatHistory}>Try Again</Button>
+                    {/* <Button variant="outline" onClick={loadChatHistory}>Try Again</Button> // loadChatHistory is now part of useEffect */}
                 </div>
-            ) : messages.length === 0 ? (
+            ) : messages.length === 0 && !loadingHistory ? (
                 <div className="flex flex-col items-center justify-center h-full text-center">
                     <MessageSquare className="h-12 w-12 text-muted-foreground mb-3" />
                     <p className="text-muted-foreground">No messages yet. Start the conversation!</p>
@@ -196,7 +202,7 @@ export default function ChatPage() {
                         <p className="text-sm">{message.text}</p>
                         <p className="text-xs mt-1 opacity-80 text-right">{formatTimestamp(message.timestamp)} by {message.senderName}</p>
                     </div>
-                    {message.senderType === 'user' && (
+                    {message.senderType === 'user' && userProfile && (
                         <Avatar className="h-8 w-8">
                         <AvatarFallback><User className="h-4 w-4" /></AvatarFallback>
                         </Avatar>
