@@ -64,16 +64,26 @@ export async function setSessionCookie(userData: UserProfile) {
     const nodeEnv = process.env.NODE_ENV;
     const isProduction = nodeEnv === 'production';
     
-    console.log(`[setSessionCookie] NODE_ENV: ${nodeEnv}, isProduction: ${isProduction}, Secure flag will be: ${isProduction}`);
+    console.log(`[setSessionCookie] Preparing to set cookie. UserData: ${JSON.stringify(userData).substring(0,100)}...`);
+    console.log(`[setSessionCookie] NODE_ENV: ${nodeEnv}, isProduction: ${isProduction}. Secure flag will be: ${isProduction}`);
 
-    cookieStore.set('session', JSON.stringify(sessionData), {
+    const cookieOptions = {
         httpOnly: true,
-        secure: isProduction, // Explicitly use the derived boolean
+        secure: isProduction,
         maxAge: 60 * 60 * 24 * 7, // 1 week
         path: '/',
-        sameSite: 'lax',
-    });
-    console.log('[setSessionCookie] Cookie set with data:', JSON.stringify(sessionData).substring(0, 100) + "...");
+        sameSite: 'lax' as 'lax' | 'strict' | 'none' | undefined, // Ensure type matches
+    };
+
+    console.log('[setSessionCookie] Attempting to set cookie "session" with options:', JSON.stringify(cookieOptions));
+    console.log('[setSessionCookie] Session data to be stringified (first 100 chars):', JSON.stringify(sessionData).substring(0, 100) + "...");
+
+    try {
+        cookieStore.set('session', JSON.stringify(sessionData), cookieOptions);
+        console.log('[setSessionCookie] Cookie "session" set successfully.');
+    } catch (error) {
+        console.error('[setSessionCookie] CRITICAL ERROR setting cookie:', error);
+    }
 }
 
 
@@ -87,7 +97,7 @@ export async function setSessionCookie(userData: UserProfile) {
 export async function loginUser(data: LoginInput): Promise<AuthResponse> {
   try {
     const validatedData = LoginSchema.parse(data);
-    console.log('Server Action: Attempting Firebase login for:', validatedData.email);
+    console.log('[loginUser] Server Action: Attempting Firebase login for:', validatedData.email);
 
     const userCredential = await signInWithEmailAndPassword(auth, validatedData.email, validatedData.password);
     const firebaseUser = userCredential.user;
@@ -109,13 +119,14 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
             };
 
             await setSessionCookie(userProfile); 
-            console.log('Server Action: Firebase Login successful, session set for:', userProfile.email);
+            console.log('[loginUser] Server Action: Firebase Login successful, session set for:', userProfile.email);
             
             const redirectToPath = userProfile.role === 'admin' ? '/admin/reports' : '/dashboard';
-            redirect(redirectToPath); // Perform server-side redirect
+            console.log(`[loginUser] Redirecting to ${redirectToPath}`);
+            redirect(redirectToPath); 
 
         } else {
-            console.error('Server Action: Firestore profile not found for user:', firebaseUser.uid);
+            console.error('[loginUser] Server Action: Firestore profile not found for user:', firebaseUser.uid);
             await firebaseSignOut(auth); 
             return { success: false, message: 'User profile not found. Please contact support.' };
         }
@@ -127,11 +138,11 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
       const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
       return { success: false, message: `Validation failed: ${messages}` };
     }
-    // Check if error is due to redirect()
     if (error.message === 'NEXT_REDIRECT' || (typeof error.digest === 'string' && error.digest.startsWith('NEXT_REDIRECT'))) {
-      throw error; // Re-throw to let Next.js handle the redirect
+      console.log('[loginUser] Caught redirect error, re-throwing.');
+      throw error; 
     }
-    console.error('Server Action Error (loginUser Firebase):', error);
+    console.error('[loginUser] Server Action Error (loginUser Firebase):', error);
     let message = 'An unexpected error occurred during login.';
     if (error.code) {
         switch (error.code) {
@@ -159,7 +170,7 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
 export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
     try {
         const validatedData = RegisterSchema.parse(data);
-        console.log('Server Action: Attempting Firebase registration for:', validatedData.email);
+        console.log('[registerUser] Server Action: Attempting Firebase registration for:', validatedData.email);
 
         const userCredential = await createUserWithEmailAndPassword(auth, validatedData.email, validatedData.password);
         const firebaseUser = userCredential.user;
@@ -187,9 +198,10 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
             };
 
             await setSessionCookie(userProfileForSession);
-            console.log('Server Action: Firebase Registration successful, session set for:', userProfileForSession.email);
+            console.log('[registerUser] Server Action: Firebase Registration successful, session set for:', userProfileForSession.email);
             
-            redirect('/dashboard'); // Perform server-side redirect
+            console.log('[registerUser] Redirecting to /dashboard');
+            redirect('/dashboard'); 
 
         } else {
              return { success: false, message: 'Firebase registration failed unexpectedly.' };
@@ -199,11 +211,11 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
             const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
             return { success: false, message: `Validation failed: ${messages}` };
         }
-        // Check if error is due to redirect()
         if (error.message === 'NEXT_REDIRECT' || (typeof error.digest === 'string' && error.digest.startsWith('NEXT_REDIRECT'))) {
-            throw error; // Re-throw to let Next.js handle the redirect
+            console.log('[registerUser] Caught redirect error, re-throwing.');
+            throw error; 
         }
-        console.error('Server Action Error (registerUser Firebase):', error);
+        console.error('[registerUser] Server Action Error (registerUser Firebase):', error);
         let message = 'An unexpected error occurred during registration.';
         if (error.code) {
             switch (error.code) {
@@ -230,11 +242,11 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
 export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<AuthResponse> {
     try {
         const validatedData = ForgotPasswordSchema.parse(data);
-        console.log('Server Action: Requesting Firebase password reset for:', validatedData.email);
+        console.log('[sendPasswordResetLink] Server Action: Requesting Firebase password reset for:', validatedData.email);
 
         await sendPasswordResetEmail(auth, validatedData.email);
         
-        console.log('Server Action: Firebase password reset link request processed for:', validatedData.email);
+        console.log('[sendPasswordResetLink] Server Action: Firebase password reset link request processed for:', validatedData.email);
         return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
 
     } catch (error: any) {
@@ -242,11 +254,10 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
             const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
             return { success: false, message: `Validation failed: ${messages}` };
         }
-        console.error('Server Action Error (sendPasswordResetLink Firebase):', error);
+        console.error('[sendPasswordResetLink] Server Action Error (sendPasswordResetLink Firebase):', error);
         if (error.code === 'auth/invalid-email') {
              return { success: false, message: 'Invalid email format.' };
         }
-        // For security reasons, even on error (like user not found), present a generic success message.
         return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
     }
 }
@@ -256,16 +267,14 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
  */
 export async function logoutUser(): Promise<{ success: boolean }> {
     try {
-        console.log('Server Action: Logging out user (Firebase and cookie)');
+        console.log('[logoutUser] Server Action: Logging out user (Firebase and cookie)');
         const cookieStore = await cookies(); 
+        console.log('[logoutUser] Deleting "session" cookie.');
         cookieStore.delete('session'); 
-        console.log('[logoutUser] Session cookie deleted.');
-        // No need to call firebaseSignOut(auth) here if we primarily rely on our own session cookie
-        // and Firebase auth state is managed client-side or not strictly necessary for this app's auth flow once logged out.
-        // If Firebase sessions were being managed on the server with Admin SDK, then server-side signout would be relevant.
+        console.log('[logoutUser] Session cookie deleted from store.');
         return { success: true };
     } catch (error) {
-        console.error('Server Action Error (logoutUser):', error);
+        console.error('[logoutUser] Server Action Error (logoutUser):', error);
         return { success: false };
     }
 }
@@ -275,24 +284,31 @@ export async function logoutUser(): Promise<{ success: boolean }> {
  */
 export async function getUserSession(): Promise<UserProfile | null> {
     console.log('[getUserSession] Attempting to get session cookie...');
-    const cookieStore = await cookies(); 
+    const cookieStore = await cookies();
+    
+    // Log all cookies available to the server for this request
+    const allCookies = cookieStore.getAll();
+    console.log('[getUserSession] All cookies available to server on this request:', JSON.stringify(allCookies.map(c => ({ name: c.name, value: c.value.substring(0,30) + "..."}))));
+
     const sessionCookie = cookieStore.get('session');
     
     if (!sessionCookie) {
-        console.log('[getUserSession] No session cookie found.');
+        console.log('[getUserSession] No "session" cookie found in store.');
         return null;
     }
 
     if (!sessionCookie.value) {
-        console.log('[getUserSession] Session cookie found, but its value is empty or undefined.');
+        console.log('[getUserSession] "session" cookie found, but its value is empty or undefined.');
+        // It's good practice to delete an empty/invalid cookie if found.
+        // However, let's be cautious to avoid delete loops if something is misconfigured.
+        // For now, just log and return null. If this log appears, investigate why it's empty.
         return null;
     }
-    console.log('[getUserSession] Session cookie found. Value (first 100 chars):', sessionCookie.value.substring(0,100) + "...");
-
+    console.log('[getUserSession] "session" cookie found. Value (first 100 chars):', sessionCookie.value.substring(0,100) + "...");
 
     try {
         const sessionData = JSON.parse(sessionCookie.value);
-        // console.log('[getUserSession] Parsed session data:', sessionData); // Be cautious logging full session data
+        // console.log('[getUserSession] Parsed session data (first 100 chars):', JSON.stringify(sessionData).substring(0,100) + "...");
 
         if (sessionData && sessionData.userId && sessionData.email && sessionData.role && sessionData.loggedInAt) {
             const userProfile: UserProfile = { 
@@ -302,15 +318,16 @@ export async function getUserSession(): Promise<UserProfile | null> {
                 role: sessionData.role,
                 phone: sessionData.phone || undefined, 
             };
-            // console.log('[getUserSession] Session valid. Returning user profile:', userProfile);
+            console.log('[getUserSession] Session valid and parsed. Returning user profile for:', userProfile.email);
             return userProfile;
         }
-        console.warn('[getUserSession] Parsed session data is malformed or missing required fields. Data:', JSON.stringify(sessionData).substring(0,100) + "...");
+        console.warn('[getUserSession] Parsed session data is malformed or missing required fields. Data (first 100 chars):', JSON.stringify(sessionData).substring(0,100) + "...");
         return null;
     } catch (error) {
-        console.error('[getUserSession] Error parsing session cookie:', error, "Cookie value (first 100 chars):", sessionCookie.value.substring(0,100) + "...");
+        console.error('[getUserSession] Error parsing "session" cookie JSON:', error, "Cookie value (first 100 chars):", sessionCookie.value.substring(0,100) + "...");
         return null;
     }
 }
+    
 
     
