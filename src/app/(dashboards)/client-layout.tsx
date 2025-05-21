@@ -1,7 +1,7 @@
 
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation'; // Import useRouter
 import {
@@ -40,10 +40,10 @@ const getNavItems = (role: UserRole | undefined) => { // Allow role to be undefi
 
     const staffItems = [
         // Example staff routes - adjust as needed
-        { href: '/staff/schedule', label: 'My Schedule', icon: Calendar },
-        { href: '/staff/tasks', label: 'Assigned Tasks', icon: Wrench },
-        { href: '/staff/chats', label: 'Customer Chats', icon: MessageSquare }, // Potentially different chat view
-        { href: '/maintenance/predictive', label: 'Maintenance Alerts', icon: Bell }, // Staff might view all alerts
+        { href: '/admin/appointments', label: 'Manage Appointments', icon: Calendar }, // Staff might manage all appointments
+        { href: '/admin/users', label: 'View Users', icon: Users }, // Staff might view users
+        // { href: '/staff/chats', label: 'Customer Chats', icon: MessageSquare }, // Potentially different chat view for staff later
+        { href: '/maintenance/predictive', label: 'Maintenance Alerts', icon: Bell },
     ];
 
      const adminItems = [
@@ -69,7 +69,8 @@ const getNavItems = (role: UserRole | undefined) => { // Allow role to be undefi
              navItems.splice(1, 0, ...adminItems); // Insert admin items after Overview
             break;
         default:
-             console.warn("Unknown user role in sidebar:", role);
+             console.warn("[ClientLayout] Unknown user role for sidebar:", role);
+            // Optionally, provide a very basic set of nav items or just commonItems
             break;
     }
     return navItems;
@@ -87,7 +88,12 @@ export default function DashboardClientLayout({ children, userProfile, logoutAct
     const { toast } = useToast();
     const [isLoggingOut, setIsLoggingOut] = useState(false);
     
-    const userRole = userProfile?.role; // Extract role from the userProfile object
+    // Log the received userProfile to debug staff role issue
+    useEffect(() => {
+        console.log("[ClientLayout] Received userProfile:", userProfile);
+    }, [userProfile]);
+
+    const userRole = userProfile?.role; 
     const navItems = getNavItems(userRole);
 
 

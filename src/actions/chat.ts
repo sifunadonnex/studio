@@ -52,7 +52,7 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
   const session = await getUserSession();
 
   if (!session?.id || !session.name) {
-    console.error('[sendUserMessageAction] Authentication error: No session ID or name found. Session:', session);
+    console.error('[sendUserMessageAction] Authentication error: No session ID or name found. Session:', JSON.stringify(session));
     return { success: false, message: "Authentication required to send messages." };
   }
   console.log(`[sendUserMessageAction] User authenticated: ${session.id} (${session.name})`);
@@ -73,7 +73,7 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
       text: validatedData.text,
       timestamp: serverTimestamp(),
     };
-    console.log('[sendUserMessageAction] Message data to be saved:', messageData);
+    console.log('[sendUserMessageAction] Message data to be saved:', JSON.stringify(messageData));
 
     const docRef = await addDoc(chatThreadRef, messageData);
     console.log('[sendUserMessageAction] Message saved to Firestore. Document ID:', docRef.id);
@@ -95,7 +95,7 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
       console.error('[sendUserMessageAction] Validation Error:', messages);
       return { success: false, message: `Validation failed: ${messages}` };
     }
-    console.error('[sendUserMessageAction] Firestore or other Error:', error);
+    console.error('[sendUserMessageAction] Firestore or other Error saving message:', error);
     let errorMessage = 'An unexpected error occurred while sending the message.';
     if (error.code) { 
         errorMessage = `Error sending message: ${error.message} (Code: ${error.code})`;
@@ -111,16 +111,21 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
  * Called by the user on their chat page.
  */
 export async function fetchChatHistoryAction(): Promise<FetchChatHistoryResponse> {
+  console.log('[fetchChatHistoryAction] Action initiated.');
   const session = await getUserSession();
   if (!session?.id) {
+    console.error('[fetchChatHistoryAction] Authentication error: No session ID. Session:', JSON.stringify(session));
     return { success: false, message: "Authentication required to fetch chat history." };
   }
+  console.log(`[fetchChatHistoryAction] Fetching history for user: ${session.id}`);
 
   try {
     const messagesCollectionRef = collection(db, 'chats', session.id, 'messages');
     const q = query(messagesCollectionRef, orderBy("timestamp", "asc")); 
+    console.log(`[fetchChatHistoryAction] Querying Firestore path: chats/${session.id}/messages, ordering by timestamp asc.`);
     
     const querySnapshot = await getDocs(q);
+    console.log(`[fetchChatHistoryAction] Fetched ${querySnapshot.docs.length} messages.`);
     const chatMessages: ChatMessage[] = querySnapshot.docs.map(docSnap => {
       const data = docSnap.data();
       return {
@@ -142,7 +147,13 @@ export async function fetchChatHistoryAction(): Promise<FetchChatHistoryResponse
         console.error(detailedMessage);
         return { success: false, message: detailedMessage, messages: [] };
     }
-    return { success: false, message: 'An unexpected error occurred while fetching chat history.', messages: [] };
+    let errorMessage = 'An unexpected error occurred while fetching chat history.';
+    if (error.code) { 
+        errorMessage = `Error fetching history: ${error.message} (Code: ${error.code})`;
+    } else if (error.message) {
+        errorMessage = error.message;
+    }
+    return { success: false, message: errorMessage, messages: [] };
   }
 }
 
@@ -201,13 +212,14 @@ export async function sendStaffMessageAction(data: StaffSendMessageInput): Promi
     // The target user would see this message through their regular fetchChatHistoryAction or real-time listeners (if implemented).
     return { success: true, message: `Message sent to user ${validatedData.targetUserId}.`, chatMessage: savedMessageForClient };
 
-  } catch (error: any) {
+  } catch (error: any)
+{
     if (error instanceof z.ZodError) {
       const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
       console.error('[sendStaffMessageAction] Validation Error:', messages);
       return { success: false, message: `Validation failed: ${messages}` };
     }
-    console.error('[sendStaffMessageAction] Firestore or other Error:', error);
+    console.error('[sendStaffMessageAction] Firestore or other Error saving staff message:', error);
     let errorMessage = 'An unexpected error occurred while sending the staff message.';
     if (error.code) { 
         errorMessage = `Error sending message: ${error.message} (Code: ${error.code})`;
