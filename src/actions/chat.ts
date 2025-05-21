@@ -40,32 +40,43 @@ export interface FetchChatHistoryResponse {
  * Saves a user's message to their chat thread in Firestore.
  */
 export async function sendUserMessageAction(data: SendMessageInput): Promise<ChatResponse> {
+  console.log('[sendUserMessageAction] Action initiated. Data received:', data);
   const session = await getUserSession();
+
   if (!session?.id || !session.name) {
+    console.error('[sendUserMessageAction] Authentication error: No session ID or name found. Session:', session);
     return { success: false, message: "Authentication required to send messages." };
   }
+  console.log(`[sendUserMessageAction] User authenticated: ${session.id} (${session.name})`);
 
   try {
     const validatedData = SendMessageSchema.parse(data);
+    console.log('[sendUserMessageAction] Data validated:', validatedData);
 
     const chatThreadRef = collection(db, 'chats', session.id, 'messages');
+    console.log(`[sendUserMessageAction] Firestore collection path: chats/${session.id}/messages`);
     
     const messageData = {
       senderId: session.id,
-      senderName: session.name, // User's name
+      senderName: session.name, // User's name from session
       senderType: 'user' as 'user' | 'staff',
       text: validatedData.text,
       timestamp: serverTimestamp(),
     };
+    console.log('[sendUserMessageAction] Message data to be saved:', messageData);
 
     const docRef = await addDoc(chatThreadRef, messageData);
+    console.log('[sendUserMessageAction] Message saved to Firestore. Document ID:', docRef.id);
 
     // For returning the saved message, we create a ChatMessage object
     // Note: serverTimestamp() resolves on the server, so for immediate return, use current date.
     // For actual timestamp, re-fetch or accept slight client/server discrepancy.
     const savedMessageForClient: ChatMessage = {
         id: docRef.id,
-        ...messageData,
+        senderId: messageData.senderId,
+        senderName: messageData.senderName,
+        senderType: messageData.senderType,
+        text: messageData.text,
         timestamp: new Date().toISOString(), // Use current date for optimistic update
     };
 
@@ -74,10 +85,18 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
   } catch (error: any) {
     if (error instanceof z.ZodError) {
       const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
+      console.error('[sendUserMessageAction] Validation Error:', messages);
       return { success: false, message: `Validation failed: ${messages}` };
     }
-    console.error('[sendUserMessageAction] Error:', error);
-    return { success: false, message: 'An unexpected error occurred while sending the message.' };
+    console.error('[sendUserMessageAction] Firestore or other Error:', error);
+    // Try to get a more specific error message from Firebase
+    let errorMessage = 'An unexpected error occurred while sending the message.';
+    if (error.code) { // Firebase errors often have a 'code' property
+        errorMessage = `Error sending message: ${error.message} (Code: ${error.code})`;
+    } else if (error.message) {
+        errorMessage = error.message;
+    }
+    return { success: false, message: errorMessage };
   }
 }
 
@@ -149,3 +168,4 @@ export async function sendStaffMessageAction(userId: string, text: string, staff
     }
 }
 */
+
