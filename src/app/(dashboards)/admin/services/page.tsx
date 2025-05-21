@@ -18,12 +18,14 @@ import {
   addServiceAction,
   updateServiceAction,
   deleteServiceAction,
-  ServiceSchema,
-  AdminService,
-  AdminServiceInput,
-  FetchServicesResponse,
-  ManageServiceResponse
 } from '@/actions/service';
+import {
+  ServiceSchema,
+  type AdminService,
+  type AdminServiceInput,
+  type FetchServicesResponse,
+  type ManageServiceResponse
+} from '@/lib/types/service'; // Import types and schema from the new location
 import { format } from 'date-fns';
 
 export default function AdminServicesPage() {
@@ -48,7 +50,7 @@ export default function AdminServicesPage() {
             if (result.success && result.services) {
                 setServices(result.services);
             } else {
-                setError(result.message);
+                setError(result.message || "Failed to fetch services.");
                 toast({ title: "Error Fetching Services", description: result.message, variant: "destructive" });
             }
         } catch (err) {
@@ -84,9 +86,19 @@ export default function AdminServicesPage() {
     };
 
     const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-        const { name, value, type } = e.target;
-        const val = type === 'number' ? parseFloat(value) : (type === 'checkbox' ? (e.target as HTMLInputElement).checked : value);
-        setServiceForm(prev => ({ ...prev, [name]: val }));
+        const { name, value } = e.target;
+        const targetType = e.target.type;
+        
+        let processedValue: string | number | boolean = value;
+        if (targetType === 'number') {
+            processedValue = parseFloat(value);
+            if (isNaN(processedValue)) {
+              // Keep as string if it's not a valid number yet to allow user to type, or set to 0 / handle error
+              // For simplicity, let Zod handle final validation, but can add immediate feedback
+              processedValue = value; // Allow typing non-numeric temporarily or handle as needed
+            }
+        }
+        setServiceForm(prev => ({ ...prev, [name]: processedValue }));
     };
     
     const handleSwitchChange = (checked: boolean) => {
@@ -98,7 +110,15 @@ export default function AdminServicesPage() {
         setFormErrors({});
         setActionLoading(true);
 
-        const validationResult = ServiceSchema.safeParse(serviceForm);
+        // Ensure price and duration are numbers before validation
+        const dataToValidate = {
+            ...serviceForm,
+            price: Number(serviceForm.price),
+            duration: Number(serviceForm.duration),
+        };
+
+
+        const validationResult = ServiceSchema.safeParse(dataToValidate);
         if (!validationResult.success) {
             const errors: Record<string, string> = {};
             validationResult.error.errors.forEach(err => {
@@ -129,6 +149,10 @@ export default function AdminServicesPage() {
     };
 
     const handleDeleteService = async (serviceId: string) => {
+        // Confirm deletion
+        if (!confirm(`Are you sure you want to delete service ${serviceId}? This action cannot be undone.`)) {
+            return;
+        }
         setActionLoading(true);
         try {
             const result: ManageServiceResponse = await deleteServiceAction(serviceId);
@@ -216,7 +240,7 @@ export default function AdminServicesPage() {
                                     <TableRow key={service.id}>
                                         <TableCell className="font-medium">{service.name}</TableCell>
                                         <TableCell className="hidden md:table-cell">{service.category}</TableCell>
-                                        <TableCell>{service.price.toLocaleString()}</TableCell>
+                                        <TableCell>{Number(service.price).toLocaleString()}</TableCell>
                                         <TableCell className="hidden lg:table-cell">{service.duration} min</TableCell>
                                         <TableCell>
                                             <Badge variant={service.isActive ? "default" : "outline"}>
@@ -261,7 +285,7 @@ export default function AdminServicesPage() {
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-1">
                                 <Label htmlFor="price">Price (KES)</Label>
-                                <Input id="price" name="price" type="number" value={serviceForm.price} onChange={handleFormChange} disabled={actionLoading} />
+                                <Input id="price" name="price" type="number" value={serviceForm.price} onChange={handleFormChange} disabled={actionLoading} step="any" />
                                 {formErrors.price && <p className="text-xs text-destructive">{formErrors.price}</p>}
                             </div>
                             <div className="space-y-1">
@@ -281,6 +305,7 @@ export default function AdminServicesPage() {
                                 <Label htmlFor="isActive">Active</Label>
                             </div>
                         </div>
+                         {formErrors.general && <p className="text-sm text-destructive">{formErrors.general}</p>}
                         <DialogFooter>
                             <DialogClose asChild><Button type="button" variant="outline" disabled={actionLoading}>Cancel</Button></DialogClose>
                             <Button type="submit" disabled={actionLoading}>
@@ -294,4 +319,3 @@ export default function AdminServicesPage() {
         </div>
     );
 }
-

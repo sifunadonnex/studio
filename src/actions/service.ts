@@ -3,42 +3,11 @@
 
 import { z } from 'zod';
 import { getUserSession } from '@/actions/auth';
+import { ServiceSchema, type AdminServiceInput, type AdminService, type ManageServiceResponse, type FetchServicesResponse } from '@/lib/types/service';
+// Firestore imports would go here if not using mock data
 // import { db } from '@/lib/firebase/config';
 // import { collection, addDoc, getDocs, updateDoc, deleteDoc, doc, serverTimestamp, Timestamp } from 'firebase/firestore';
 
-// --- Types and Schemas ---
-export const ServiceSchema = z.object({
-  id: z.string().optional(), // Firestore document ID
-  name: z.string().min(3, { message: "Service name must be at least 3 characters." }),
-  description: z.string().min(10, { message: "Description must be at least 10 characters." }),
-  price: z.number().min(0, { message: "Price must be a positive number." }),
-  category: z.string().min(2, { message: "Category is required." }), // e.g., Maintenance, Repair, Inspection
-  duration: z.number().min(15, { message: "Duration must be at least 15 minutes." }), // in minutes
-  isActive: z.boolean().default(true),
-  // Timestamps will be handled by Firestore serverTimestamp or serialized for client
-  // createdAt: z.any().optional(),
-  // updatedAt: z.any().optional(),
-});
-
-export type AdminServiceInput = z.infer<typeof ServiceSchema>;
-
-export interface AdminService extends AdminServiceInput {
-  id: string; // Ensure ID is always present for fetched services
-  createdAt?: string; // Serialized Timestamp
-  updatedAt?: string; // Serialized Timestamp
-}
-
-export interface FetchServicesResponse {
-  success: boolean;
-  message: string;
-  services?: AdminService[];
-}
-
-export interface ManageServiceResponse {
-  success: boolean;
-  message: string;
-  serviceId?: string;
-}
 
 // --- Mock Data (Replace with Firestore interaction) ---
 let mockAdminServices: AdminService[] = [
