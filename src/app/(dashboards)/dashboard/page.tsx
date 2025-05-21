@@ -1,7 +1,8 @@
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import { Calendar, Wrench, MessageSquare, User, FileText, Bell, LogOut, Car, BarChart2, Users, Settings } from "lucide-react";
+import { Calendar, Wrench, MessageSquare, User, FileText, Bell, Car, BarChart2, Users, Settings, Info } from "lucide-react";
 import { getUserSession } from "@/actions/auth"; // Import session utility
 import { redirect } from 'next/navigation';
 
@@ -55,11 +56,9 @@ export default async function DashboardPage() {
 
 
 // --- Role-Specific Dashboard Components ---
-// These remain simple functional components, receiving data via props if needed in the future.
 
 function CustomerDashboard() {
-  // TODO: Fetch real data (upcoming appointment, prediction, messages) server-side and pass as props if needed
-  // For now, using static placeholders
+  // TODO: Fetch real data (upcoming appointment, prediction, messages) server-side and pass as props
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       {/* Upcoming Appointment */}
@@ -69,10 +68,10 @@ function CustomerDashboard() {
           <CardDescription>Your next scheduled service.</CardDescription>
         </CardHeader>
         <CardContent>
-          {/* Placeholder Data */}
-          <p><strong>Service:</strong> Standard Oil Change</p>
+          <p className="text-muted-foreground">No upcoming appointments.</p>
+          {/* <p><strong>Service:</strong> Standard Oil Change</p>
           <p><strong>Date:</strong> October 26, 2024</p>
-          <p><strong>Time:</strong> 10:00 AM</p>
+          <p><strong>Time:</strong> 10:00 AM</p> */}
           <Link href="/appointments" passHref>
             <Button variant="outline" size="sm" className="mt-4 w-full">Manage Appointments</Button>
           </Link>
@@ -86,10 +85,10 @@ function CustomerDashboard() {
           <CardDescription>Estimated next service needed.</CardDescription>
         </CardHeader>
         <CardContent>
-           {/* Placeholder Data */}
-          <p>Next recommended service: <strong>Brake Inspection</strong></p>
-          <p>Estimated Date: <strong>November 15, 2024</strong></p>
-           <p className="text-xs text-muted-foreground mt-2">Based on your service history.</p>
+           <p className="text-muted-foreground">No maintenance predictions available yet.</p>
+           <p className="text-xs text-muted-foreground mt-1">Add a vehicle and service history in your profile to enable predictions.</p>
+           {/* <p>Next recommended service: <strong>Brake Inspection</strong></p>
+           <p>Estimated Date: <strong>November 15, 2024</strong></p> */}
            <Link href="/maintenance/predictive" passHref>
                <Button variant="secondary" size="sm" className="mt-4 w-full">View Details</Button>
            </Link>
@@ -103,10 +102,10 @@ function CustomerDashboard() {
             <CardDescription>Your current plan details.</CardDescription>
         </CardHeader>
          <CardContent>
-             {/* Placeholder Data */}
-            <p><strong>Plan:</strong> Monthly Care Plan</p>
+            <p className="text-muted-foreground">No active subscription found.</p>
+            {/* <p><strong>Plan:</strong> Monthly Care Plan</p>
             <p><strong>Status:</strong> Active</p>
-             <p><strong>Next Billing Date:</strong> November 1, 2024</p>
+             <p><strong>Next Billing Date:</strong> November 1, 2024</p> */}
            <Link href="/subscriptions/manage" passHref>
                 <Button variant="outline" size="sm" className="mt-4 w-full">Manage Subscription</Button>
             </Link>
@@ -141,10 +140,8 @@ function CustomerDashboard() {
                  <CardDescription>Latest communications with our team.</CardDescription>
             </CardHeader>
             <CardContent>
-                {/* TODO: Fetch and display recent messages */}
                  <p className="text-muted-foreground text-sm p-4 border rounded-md">
-                    <strong>Staff:</strong> Hi Jane, your vehicle's oil change is complete and ready for pickup.
-                     <span className="block text-xs mt-1">October 25, 2024, 3:30 PM</span>
+                    No recent messages.
                  </p>
                  <Link href="/chat" passHref>
                      <Button variant="link" size="sm" className="mt-2">View All Messages</Button>
@@ -157,60 +154,44 @@ function CustomerDashboard() {
 }
 
 function StaffDashboard() {
-   // TODO: Fetch real data server-side and pass as props
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-       {/* Today's Schedule */}
       <Card className="md:col-span-2 lg:col-span-3">
         <CardHeader>
            <CardTitle className="flex items-center gap-2"><Calendar className="h-5 w-5" /> Today's Schedule</CardTitle>
            <CardDescription>Appointments assigned or needing attention.</CardDescription>
         </CardHeader>
          <CardContent>
-           {/* Placeholder Data */}
-            <p className="text-muted-foreground">10:00 AM - John Doe - Standard Oil Change (Toyota Corolla)</p>
-           <p className="text-muted-foreground">11:00 AM - Jane Smith - Brake Inspection (Nissan X-Trail)</p>
-            <p className="text-muted-foreground">02:00 PM - Alex Kiprop - Engine Diagnostics (Subaru Forester)</p>
-           {/* Adjust link based on actual staff route */}
-           <Link href="/staff/schedule" passHref>
+           <p className="text-muted-foreground">No appointments scheduled for today.</p>
+           <Link href="/staff/schedule" passHref> {/* Adjust link as needed */}
                 <Button variant="outline" size="sm" className="mt-4">View Full Schedule</Button>
             </Link>
         </CardContent>
       </Card>
 
-       {/* Customer Chats */}
        <Card>
          <CardHeader>
             <CardTitle className="flex items-center gap-2"><MessageSquare className="h-5 w-5" /> Customer Chats</CardTitle>
             <CardDescription>Unread or ongoing conversations.</CardDescription>
          </CardHeader>
           <CardContent>
-             {/* Placeholder Data */}
              <p className="text-muted-foreground text-sm p-2 border rounded-md mb-2">
-                 <strong>Customer: Alex K.</strong> - "Is my car ready yet?" <span className="block text-xs mt-1">2 mins ago</span>
+                 No active customer chats.
             </p>
-            <p className="text-muted-foreground text-sm p-2 border rounded-md">
-                 <strong>Customer: Mary W.</strong> - "Can I reschedule my appointment?" <span className="block text-xs mt-1">1 hour ago</span>
-            </p>
-             {/* Adjust link based on actual staff route */}
-            <Link href="/staff/chats" passHref>
+            <Link href="/staff/chats" passHref> {/* Adjust link as needed */}
                  <Button variant="link" size="sm" className="mt-2">Open Chat Interface</Button>
             </Link>
          </CardContent>
        </Card>
 
-      {/* Predictive Maintenance Alerts (Maybe show all relevant) */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Bell className="h-5 w-5 text-accent" /> Maintenance Alerts</CardTitle>
           <CardDescription>Vehicles flagged for upcoming service.</CardDescription>
         </CardHeader>
         <CardContent>
-          {/* Placeholder Data */}
-          <p className="text-sm"><strong>Vehicle:</strong> KDA 123X (Toyota Prado) - Est. Battery Check Needed</p>
-          <p className="text-sm"><strong>Vehicle:</strong> KDB 456Y (Honda CRV) - Est. Tire Rotation Due</p>
-            {/* Adjust link based on actual staff route */}
-           <Link href="/maintenance/predictive" passHref>
+          <p className="text-muted-foreground text-sm">No maintenance alerts at this time.</p>
+           <Link href="/maintenance/predictive" passHref> {/* Adjust link as needed */}
               <Button variant="outline" size="sm" className="mt-4 w-full">View All Alerts</Button>
           </Link>
         </CardContent>
@@ -220,18 +201,15 @@ function StaffDashboard() {
 }
 
 function AdminDashboard() {
-    // TODO: Fetch real data server-side and pass as props
   return (
      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {/* Key Metrics */}
         <Card>
              <CardHeader>
                  <CardTitle className="text-lg">Today's Bookings</CardTitle>
              </CardHeader>
             <CardContent>
-                {/* Placeholder */}
-                 <p className="text-3xl font-bold">15</p>
-                 <p className="text-xs text-muted-foreground">+2 from yesterday</p>
+                 <p className="text-3xl font-bold">0</p>
+                 <p className="text-xs text-muted-foreground">N/A</p>
             </CardContent>
         </Card>
         <Card>
@@ -239,9 +217,8 @@ function AdminDashboard() {
                  <CardTitle className="text-lg">Active Subscriptions</CardTitle>
              </CardHeader>
              <CardContent>
-                 {/* Placeholder */}
-                <p className="text-3xl font-bold">128</p>
-                <p className="text-xs text-muted-foreground">Monthly: 95, Yearly: 33</p>
+                <p className="text-3xl font-bold">0</p>
+                <p className="text-xs text-muted-foreground">N/A</p>
              </CardContent>
         </Card>
        <Card>
@@ -249,9 +226,8 @@ function AdminDashboard() {
                 <CardTitle className="text-lg">Pending Chats</CardTitle>
              </CardHeader>
             <CardContent>
-                 {/* Placeholder */}
-                 <p className="text-3xl font-bold">3</p>
-                <p className="text-xs text-muted-foreground">Avg. response time: 15min</p>
+                 <p className="text-3xl font-bold">0</p>
+                <p className="text-xs text-muted-foreground">N/A</p>
              </CardContent>
        </Card>
         <Card>
@@ -259,14 +235,11 @@ function AdminDashboard() {
                  <CardTitle className="text-lg">Est. Monthly Revenue</CardTitle>
              </CardHeader>
             <CardContent>
-                 {/* Placeholder */}
-                 <p className="text-3xl font-bold">KES 450K</p>
-                 <p className="text-xs text-muted-foreground">Based on current bookings & subs</p>
+                 <p className="text-3xl font-bold">KES 0</p>
+                 <p className="text-xs text-muted-foreground">N/A</p>
              </CardContent>
        </Card>
 
-
-       {/* Admin Actions */}
         <Card className="lg:col-span-2">
             <CardHeader>
                 <CardTitle>Management</CardTitle>
@@ -279,20 +252,23 @@ function AdminDashboard() {
            </CardContent>
         </Card>
 
-        {/* Reports */}
         <Card className="lg:col-span-2">
             <CardHeader>
                 <CardTitle>Reports</CardTitle>
                  <CardDescription>Generate insights from garage data.</CardDescription>
             </CardHeader>
             <CardContent className="grid grid-cols-1 gap-2 text-sm">
-                {/* Link to the main reports page */}
                  <Link href="/admin/reports" passHref className="mt-2">
                      <Button variant="secondary" size="sm" className="w-full"><BarChart2 className="mr-2 h-4 w-4"/> View All Reports</Button>
                 </Link>
+                 <div className="p-4 border rounded-md bg-muted/50 mt-2">
+                    <div className="flex items-center gap-2">
+                        <Info className="h-5 w-5 text-muted-foreground"/>
+                        <p className="text-sm text-muted-foreground">Reporting features are under development. </p>
+                    </div>
+                </div>
             </CardContent>
         </Card>
-
      </div>
   );
 }
