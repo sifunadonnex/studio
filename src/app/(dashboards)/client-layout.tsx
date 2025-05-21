@@ -1,3 +1,4 @@
+
 'use client';
 
 import React, { useState } from 'react';
@@ -18,11 +19,12 @@ import {
 import { Button } from '@/components/ui/button';
 import { Home, Calendar, Wrench, MessageSquare, FileText, Users, Settings, Bell, BarChart2, LogOut, Car } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import type { UserProfile } from '@/actions/auth'; // Import UserProfile type
 
 type UserRole = 'customer' | 'staff' | 'admin';
 
 // Define navigation items based on role
-const getNavItems = (role: UserRole) => {
+const getNavItems = (role: UserRole | undefined) => { // Allow role to be undefined initially
     const commonItems = [
         { href: '/dashboard', label: 'Overview', icon: Home },
         { href: '/chat', label: 'Chat', icon: MessageSquare },
@@ -62,14 +64,11 @@ const getNavItems = (role: UserRole) => {
             break;
         case 'staff':
              navItems.splice(1, 0, ...staffItems); // Insert staff items after Overview
-             // Staff might not need profile/settings directly? Adjust commonItems if needed.
             break;
         case 'admin':
              navItems.splice(1, 0, ...adminItems); // Insert admin items after Overview
-             // Admin might need profile/settings? Keep commonItems.
             break;
         default:
-            // Fallback or basic view if role is unknown (should ideally not happen if session is valid)
              console.warn("Unknown user role in sidebar:", role);
             break;
     }
@@ -79,25 +78,27 @@ const getNavItems = (role: UserRole) => {
 
 interface DashboardClientLayoutProps {
   children: React.ReactNode;
-  userRole: UserRole;
-  logoutAction: () => Promise<{ success: boolean }>; // Accept logout server action
+  userProfile: UserProfile; // Expect the full UserProfile object
+  logoutAction: () => Promise<{ success: boolean }>;
 }
 
-export default function DashboardClientLayout({ children, userRole, logoutAction }: DashboardClientLayoutProps) {
+export default function DashboardClientLayout({ children, userProfile, logoutAction }: DashboardClientLayoutProps) {
     const router = useRouter();
     const { toast } = useToast();
-    const [isLoggingOut, setIsLoggingOut] = useState(false); // Add loading state for logout
+    const [isLoggingOut, setIsLoggingOut] = useState(false);
+    
+    const userRole = userProfile?.role; // Extract role from the userProfile object
     const navItems = getNavItems(userRole);
 
 
     const handleLogout = async () => {
          setIsLoggingOut(true);
          try {
-            const result = await logoutAction(); // Call the passed server action
+            const result = await logoutAction();
             if (result.success) {
                 toast({ title: "Logged Out", description: "You have been successfully logged out." });
-                router.push('/login'); // Redirect client-side after logout
-                router.refresh(); // Ensure layout re-renders without old session data
+                router.push('/login');
+                router.refresh();
             } else {
                  toast({ title: "Logout Failed", description: "Could not log you out. Please try again.", variant: "destructive" });
             }
@@ -124,7 +125,6 @@ export default function DashboardClientLayout({ children, userRole, logoutAction
                const Icon = item.icon;
                return (
                 <SidebarMenuItem key={item.href}>
-                   {/* Use standard Link for client-side navigation */}
                    <Link href={item.href} passHref legacyBehavior>
                      <SidebarMenuButton tooltip={item.label}>
                         <Icon />
@@ -148,14 +148,10 @@ export default function DashboardClientLayout({ children, userRole, logoutAction
         </SidebarFooter>
       </Sidebar>
       <SidebarInset>
-        {/* Mobile Header with Trigger */}
          <header className="sticky top-0 z-40 flex h-14 items-center gap-4 border-b bg-background px-4 md:hidden">
              <SidebarTrigger/>
-             {/* TODO: Dynamically set header title based on current page */}
              <h1 className="flex-1 text-lg font-semibold text-primary">Dashboard</h1>
-              {/* Optional: Add profile dropdown or other actions for mobile */}
          </header>
-        {/* Main Content Area */}
         <div className="flex-1 p-4 md:p-6 lg:p-8">
             {children}
         </div>
