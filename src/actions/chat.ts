@@ -108,10 +108,10 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
     }
     console.error('[sendUserMessageAction] Firestore or other Error saving message:', error);
     let errorMessage = 'An unexpected error occurred while sending the message.';
-    if (error.message) { // More direct error message if available
+    if (error.message) { 
         errorMessage = error.message;
     } else if (error.code) { 
-        errorMessage = `Error sending message (Code: ${error.code})`;
+        errorMessage = `Error sending message (Code: ${error.code || 'N/A'})`;
     }
     return { success: false, message: errorMessage };
   }
@@ -158,7 +158,7 @@ export async function fetchChatHistoryAction(): Promise<FetchChatHistoryResponse
     } else if (error.message) {
         errorMessage = error.message;
     } else if (error.code) { 
-        errorMessage = `Error fetching history (Code: ${error.code})`;
+        errorMessage = `Error fetching history (Code: ${error.code || 'N/A'})`;
     }
     return { success: false, message: errorMessage, messages: [] };
   }
@@ -224,7 +224,7 @@ export async function sendStaffMessageAction(data: StaffSendMessageInput): Promi
      if (error.message) {
         errorMessage = error.message;
     } else if (error.code) { 
-        errorMessage = `Error sending message (Code: ${error.code})`;
+        errorMessage = `Error sending message (Code: ${error.code || 'N/A'})`;
     }
     return { success: false, message: errorMessage };
   }
@@ -248,29 +248,39 @@ export async function getActiveChatUsersAction(): Promise<FetchActiveChatUsersRe
         const chatsCollectionRef = collection(db, 'chats');
         const chatDocsSnapshot = await getDocs(chatsCollectionRef);
         
+        console.log(`[getActiveChatUsersAction] Snapshot of 'chats' collection received. Number of docs: ${chatDocsSnapshot.size}. Is empty: ${chatDocsSnapshot.empty}`);
+
+        if (chatDocsSnapshot.empty) {
+            console.log("[getActiveChatUsersAction] No documents found in 'chats' collection. Either it's empty or permissions are insufficient for listing.");
+            return { success: true, message: "No active chat users found.", users: [] };
+        }
+        
         const userChatPromises = chatDocsSnapshot.docs.map(async (chatDoc) => {
             const userId = chatDoc.id;
-            const userProfile = await fetchUserProfile(userId); // Use existing helper
+            console.log(`[getActiveChatUsersAction] Processing chat for userId: ${userId}`);
+            const userProfile = await fetchUserProfile(userId); 
             if (userProfile) {
+                console.log(`[getActiveChatUsersAction] User profile found for ${userId}: ${userProfile.name}`);
                 return {
                     id: userProfile.id,
                     name: userProfile.name,
                     email: userProfile.email,
                 } as ChatUser;
             }
+            console.warn(`[getActiveChatUsersAction] User profile NOT found for userId: ${userId}. This user will not be listed.`);
             return null;
         });
 
         const chatUsers = (await Promise.all(userChatPromises)).filter(user => user !== null) as ChatUser[];
         
-        console.log(`[getActiveChatUsersAction] Found ${chatUsers.length} active chat users.`);
+        console.log(`[getActiveChatUsersAction] Found ${chatUsers.length} active chat users after processing profiles.`);
         return { success: true, message: "Active chat users fetched.", users: chatUsers };
 
     } catch (error: any) {
         console.error('[getActiveChatUsersAction] Error fetching active chat users:', error);
         let errorMessage = 'An unexpected error occurred while fetching chat users.';
         if (error.message) errorMessage = error.message;
-        else if (error.code) errorMessage = `Error (Code: ${error.code})`;
+        else if (error.code) errorMessage = `Error (Code: ${error.code || 'N/A'})`;
         return { success: false, message: errorMessage, users: [] };
     }
 }
@@ -314,7 +324,7 @@ export async function fetchMessagesForUserByStaffAction(targetUserId: string): P
 
         return { success: true, message: "Chat history fetched successfully.", messages: chatMessages };
 
-    } catch (error: any) {
+    } catch (error: any)
         console.error(`[fetchMessagesForUserByStaffAction] Error fetching chat history for user ${targetUserId}:`, error);
         let errorMessage = 'An unexpected error occurred.';
         if (error.code === 'failed-precondition' && error.message && error.message.includes('index')) {
@@ -322,7 +332,7 @@ export async function fetchMessagesForUserByStaffAction(targetUserId: string): P
         } else if (error.message) {
             errorMessage = error.message;
         } else if (error.code) {
-            errorMessage = `Error (Code: ${error.code})`;
+            errorMessage = `Error (Code: ${error.code || 'N/A'})`;
         }
         return { success: false, message: errorMessage, messages: [] };
     }
