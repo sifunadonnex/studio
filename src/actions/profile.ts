@@ -31,10 +31,21 @@ const VehicleSchema = z.object({
     updatedAt: z.string().optional(), // Serialized Timestamp
 });
 
+const UpdateUserByAdminSchema = z.object({
+    userId: z.string().min(1, { message: "User ID is required."}),
+    name: z.string().min(2, { message: 'Name must be at least 2 characters.' }),
+    email: z.string().email({ message: 'Invalid email address (cannot be changed here, for reference only)'}).optional(), // Email shouldn't be editable by admin this way
+    role: z.enum(['customer', 'staff', 'admin'], { message: "Invalid role."}),
+    phone: z.string().nullable().optional(),
+});
+
+
 // --- Types ---
 export type UpdateProfileInput = z.infer<typeof UpdateProfileSchema>;
 export type ChangePasswordInput = z.infer<typeof ChangePasswordSchema>;
 export type VehicleInput = z.infer<typeof VehicleSchema>;
+export type UpdateUserByAdminInput = z.infer<typeof UpdateUserByAdminSchema>;
+
 
 export interface ProfileResponse {
   success: boolean;
@@ -315,8 +326,6 @@ export async function fetchAllUsersAction(): Promise<AllUsersResponse> {
     console.log(`[fetchAllUsersAction] Admin ${session.id} fetching all users.`);
     try {
         const usersCollectionRef = collection(db, 'users');
-        // Consider adding orderBy if needed, e.g., orderBy("createdAt", "desc")
-        // This might require an index if you add it.
         const q = query(usersCollectionRef, orderBy("name", "asc")); 
         const usersSnap = await getDocs(q);
         
@@ -328,7 +337,7 @@ export async function fetchAllUsersAction(): Promise<AllUsersResponse> {
                 id: docSnap.id,
                 name: data.name || 'N/A',
                 email: data.email || 'N/A',
-                role: data.role || 'customer', // Default to customer if role is missing
+                role: data.role || 'customer', 
                 phone: data.phone || null,
                 createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate().toISOString() : (typeof data.createdAt === 'string' ? data.createdAt : undefined),
                 updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toDate().toISOString() : (typeof data.updatedAt === 'string' ? data.updatedAt : undefined),
@@ -347,3 +356,51 @@ export async function fetchAllUsersAction(): Promise<AllUsersResponse> {
         return { success: false, message: detailedMessage, users: [] };
     }
 }
+
+
+/**
+ * Updates a user's profile details (name, role, phone) by an admin.
+ */
+export async function updateUserByAdminAction(data: UpdateUserByAdminInput): Promise<ProfileResponse> {
+    const session = await getUserSession();
+    if (!session?.id || session.role !== 'admin') {
+        return { success: false, message: "Unauthorized: Admin privileges required." };
+    }
+
+    try {
+        const validatedData = UpdateUserByAdminSchema.parse(data);
+        console.log(`[updateUserByAdminAction] Admin ${session.id} updating user ${validatedData.userId}:`, validatedData);
+
+        const userDocRef = doc(db, 'users', validatedData.userId);
+        
+        // Check if user exists before attempting update
+        const userDocSnap = await getDoc(userDocRef);
+        if (!userDocSnap.exists()) {
+            return { success: false, message: `User with ID ${validatedData.userId} not found.` };
+        }
+
+        await updateDoc(userDocRef, {
+            name: validatedData.name,
+            role: validatedData.role,
+            phone: validatedData.phone === undefined ? null : validatedData.phone, // Ensure phone is null if not provided, not undefined
+            updatedAt: serverTimestamp(),
+        });
+
+        // Optionally, re-fetch the specific user's profile to return it if needed by the client
+        // const updatedUser = await fetchUserProfile(validatedData.userId);
+
+        return { success: true, message: `User ${validatedData.name} updated successfully.` /*, user: updatedUser */ };
+
+    } catch (error: any) {
+        if (error instanceof z.ZodError) {
+            const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
+            return { success: false, message: `Validation failed: ${messages}` };
+        }
+        console.error('[updateUserByAdminAction] Error:', error);
+        if (error.code === 'permission-denied') {
+             return { success: false, message: "Permission denied. Ensure Firestore rules allow admin updates."};
+        }
+        return { success: false, message: 'An unexpected error occurred while updating user.' };
+    }
+}
+
