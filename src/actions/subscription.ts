@@ -2,7 +2,9 @@
 'use server';
 
 import { z } from 'zod';
-import { Timestamp } from 'firebase/firestore'; // For type consistency with eventual Firebase use
+import { Timestamp, collection, doc, getDocs, getDoc, updateDoc, query, orderBy, serverTimestamp } from 'firebase/firestore';
+import { db } from '@/lib/firebase/config';
+import { getUserSession, UserProfile } from '@/actions/auth';
 
 // --- Types ---
 export type SubscriptionStatus = 'active' | 'cancelled' | 'expired' | 'payment_failed' | 'pending';
@@ -40,103 +42,122 @@ export interface UpdateSubscriptionStatusResponse {
   message: string;
 }
 
-// --- Mock Data (Replace with Firestore fetching) ---
-const mockAdminSubscriptions: AdminSubscription[] = [
-  {
-    id: 'sub_admin_001',
-    userId: 'usr_001',
-    customerName: 'Alice Wonderland',
-    customerEmail: 'alice@example.com',
-    planId: 'monthly',
-    planName: 'Monthly Care Plan',
-    status: 'active',
-    startDate: new Date(2024, 7, 1).toISOString(), // Aug 1, 2024
-    nextBillingDate: new Date(2024, 10, 1).toISOString(), // Nov 1, 2024
-    price: 2500,
-    currency: 'KES',
-    createdAt: new Date(2024, 7, 1).toISOString(),
-    updatedAt: new Date(2024, 9, 1).toISOString(),
-  },
-  {
-    id: 'sub_admin_002',
-    userId: 'usr_004',
-    customerName: 'Diana Prince',
-    customerEmail: 'diana@example.com',
-    planId: 'yearly',
-    planName: 'Annual Pro Plan',
-    status: 'active',
-    startDate: new Date(2024, 0, 15).toISOString(), // Jan 15, 2024
-    nextBillingDate: new Date(2025, 0, 15).toISOString(), // Jan 15, 2025
-    price: 25000,
-    currency: 'KES',
-    createdAt: new Date(2024, 0, 15).toISOString(),
-    updatedAt: new Date(2024, 0, 15).toISOString(),
-  },
-  {
-    id: 'sub_admin_003',
-    userId: 'some_other_user_id',
-    customerName: 'Bob The Builder',
-    customerEmail: 'bob_guest@example.com',
-    planId: 'basic',
-    planName: 'Basic Checkup Plan',
-    status: 'cancelled',
-    startDate: new Date(2024, 5, 1).toISOString(), // June 1, 2024
-    endDate: new Date(2024, 6, 1).toISOString(), // July 1, 2024
-    price: 1000,
-    currency: 'KES',
-    createdAt: new Date(2024, 5, 1).toISOString(),
-    updatedAt: new Date(2024, 6, 1).toISOString(),
-  },
-];
+const serializeTimestamp = (timestamp: any): string | undefined => {
+    if (timestamp instanceof Timestamp) {
+        return timestamp.toDate().toISOString();
+    }
+    if (typeof timestamp === 'string') { // Already serialized
+        return timestamp;
+    }
+    return undefined;
+};
+
 
 /**
- * Fetches all subscriptions (stubbed).
- * In a real implementation, this would query Firestore, potentially joining user data.
+ * Fetches all subscriptions from Firestore.
+ * Populates customerName/Email by looking up the userId in the 'users' collection.
  */
 export async function fetchAllSubscriptionsAction(): Promise<FetchAllSubscriptionsResponse> {
-  console.log('[fetchAllSubscriptionsAction] Admin: Fetching all subscriptions (stubbed).');
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 700));
+  const session = await getUserSession();
+  if (!session?.id || session.role !== 'admin') {
+    console.warn('[fetchAllSubscriptionsAction] Unauthorized attempt.');
+    return { success: false, message: "Unauthorized: Admin privileges required." };
+  }
+  console.log('[fetchAllSubscriptionsAction] Admin: Fetching all subscriptions from Firestore.');
 
-  // In a real scenario, you'd fetch from Firestore's 'subscriptions' collection
-  // and potentially populate customerName/Email by looking up the userId in the 'users' collection.
+  try {
+    const subscriptionsCollectionRef = collection(db, 'subscriptions');
+    // Consider ordering, e.g., by createdAt or startDate
+    const q = query(subscriptionsCollectionRef, orderBy("createdAt", "desc"));
+    const querySnapshot = await getDocs(q);
 
-  return {
-    success: true,
-    message: 'Subscriptions fetched successfully (stubbed).',
-    subscriptions: mockAdminSubscriptions,
-  };
+    const subscriptionsPromises = querySnapshot.docs.map(async (subDocSnap) => {
+      const subData = subDocSnap.data();
+      let customerName = 'N/A';
+      let customerEmail = 'N/A';
+
+      if (subData.userId) {
+        const userDocRef = doc(db, 'users', subData.userId);
+        const userDocSnap = await getDoc(userDocRef);
+        if (userDocSnap.exists()) {
+          const userData = userDocSnap.data();
+          customerName = userData.name || 'Unknown User';
+          customerEmail = userData.email || 'No Email';
+        }
+      }
+
+      return {
+        id: subDocSnap.id,
+        userId: subData.userId || 'N/A',
+        customerName,
+        customerEmail,
+        planId: subData.planId,
+        planName: subData.planName,
+        status: subData.status as SubscriptionStatus,
+        startDate: serializeTimestamp(subData.startDate) || new Date(0).toISOString(),
+        endDate: serializeTimestamp(subData.endDate),
+        nextBillingDate: serializeTimestamp(subData.nextBillingDate),
+        price: subData.price || 0,
+        currency: subData.currency || 'KES',
+        createdAt: serializeTimestamp(subData.createdAt) || new Date(0).toISOString(),
+        updatedAt: serializeTimestamp(subData.updatedAt) || new Date(0).toISOString(),
+      } as AdminSubscription;
+    });
+
+    const allSubscriptions = await Promise.all(subscriptionsPromises);
+    
+    console.log(`[fetchAllSubscriptionsAction] Fetched ${allSubscriptions.length} subscriptions for admin view.`);
+    return {
+      success: true,
+      message: 'Subscriptions fetched successfully from Firestore.',
+      subscriptions: allSubscriptions,
+    };
+
+  } catch (error: any) {
+    console.error('[fetchAllSubscriptionsAction] Error fetching subscriptions from Firestore:', error);
+    let detailedMessage = 'An unexpected error occurred while fetching subscriptions.';
+    if (error.code && error.message) {
+        detailedMessage = `Error fetching subscriptions: ${error.message} (Code: ${error.code}). Check server logs.`;
+    }
+    return { success: false, message: detailedMessage, subscriptions: [] };
+  }
 }
 
 /**
- * Updates the status of a subscription (stubbed).
+ * Updates the status of a subscription in Firestore.
  */
 export async function updateSubscriptionStatusAction(
   data: UpdateSubscriptionStatusInput
 ): Promise<UpdateSubscriptionStatusResponse> {
-  const { subscriptionId, newStatus } = data;
-  console.log(
-    `[updateSubscriptionStatusAction] Admin: Updating subscription ${subscriptionId} to status ${newStatus} (stubbed).`
-  );
-
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 500));
-
-  // In a real scenario, you'd find the subscription in Firestore by ID and update its status field
-  // and the updatedAt timestamp.
-  const targetSubIndex = mockAdminSubscriptions.findIndex(sub => sub.id === subscriptionId);
-  if (targetSubIndex !== -1) {
-    mockAdminSubscriptions[targetSubIndex].status = newStatus;
-    mockAdminSubscriptions[targetSubIndex].updatedAt = new Date().toISOString();
-     console.log(`[updateSubscriptionStatusAction] Mock data updated for ${subscriptionId}`);
-  } else {
-     console.warn(`[updateSubscriptionStatusAction] Mock subscription with ID ${subscriptionId} not found.`);
-     return { success: false, message: `Subscription with ID ${subscriptionId} not found (stubbed).` };
+  const session = await getUserSession();
+  if (!session?.id || session.role !== 'admin') {
+    console.warn('[updateSubscriptionStatusAction] Unauthorized attempt.');
+    return { success: false, message: "Unauthorized: Admin privileges required." };
   }
 
+  const { subscriptionId, newStatus } = data;
+  if (!subscriptionId || !newStatus) {
+      return { success: false, message: "Subscription ID and new status are required." };
+  }
+  console.log(
+    `[updateSubscriptionStatusAction] Admin: Updating subscription ${subscriptionId} to status ${newStatus} in Firestore.`
+  );
 
-  return {
-    success: true,
-    message: `Subscription ${subscriptionId} status updated to ${newStatus} (stubbed).`,
-  };
+  try {
+    const subscriptionDocRef = doc(db, "subscriptions", subscriptionId);
+    await updateDoc(subscriptionDocRef, {
+      status: newStatus,
+      updatedAt: serverTimestamp(),
+    });
+
+    console.log(`[updateSubscriptionStatusAction] Firestore: Updated status for subscription ${subscriptionId} to ${newStatus}`);
+    return {
+      success: true,
+      message: `Subscription ${subscriptionId} status updated to ${newStatus} in Firestore.`,
+    };
+  } catch (error: any) {
+    console.error('[updateSubscriptionStatusAction] Error updating subscription status in Firestore:', error);
+    return { success: false, message: 'An unexpected error occurred while updating subscription status.' };
+  }
 }
+
