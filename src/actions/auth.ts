@@ -39,7 +39,7 @@ export interface UserProfile {
     name: string;
     email: string;
     role: 'customer' | 'staff' | 'admin';
-    phone?: string;
+    phone?: string | null; // Allow null for phone
     createdAt?: string;
     updatedAt?: string;
 }
@@ -122,7 +122,7 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
                 name: firestoreData.name,
                 email: firestoreData.email,
                 role: firestoreData.role as 'customer' | 'staff' | 'admin', 
-                phone: firestoreData.phone,
+                phone: firestoreData.phone || null, // Ensure phone is null if not present
                 createdAt: (firestoreData.createdAt instanceof Timestamp ? firestoreData.createdAt.toDate() : firestoreData.createdAt)?.toISOString(),
                 updatedAt: (firestoreData.updatedAt instanceof Timestamp ? firestoreData.updatedAt.toDate() : firestoreData.updatedAt)?.toISOString(),
             };
@@ -185,19 +185,23 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
         const userCredential = await createUserWithEmailAndPassword(auth, validatedData.email, validatedData.password);
         const firebaseUser = userCredential.user;
 
-        if (!firebaseUser || !firebaseUser.email) {
-            console.error('[registerUser] Firebase user created successfully, but user object or email is missing. This should not happen.');
-            // Attempt to sign out the partially created user to avoid orphaned accounts if possible.
-            if (firebaseUser) await firebaseSignOut(auth);
-            return { success: false, message: 'Registration process failed due to incomplete user data from authentication provider.' };
+        if (!firebaseUser) { // Initial check if firebaseUser itself is null
+            console.error('[registerUser] Firebase user creation failed, user object is null.');
+            return { success: false, message: 'Registration process failed: no user data received from authentication provider.' };
+        }
+        if (!firebaseUser.email) { // Check specifically for email
+             console.error('[registerUser] Firebase user created, but email is missing. This should not happen for email/password auth.');
+             // Attempt to sign out the partially created user to avoid orphaned accounts if possible.
+             await firebaseSignOut(auth);
+             return { success: false, message: 'Registration process failed due to incomplete user data (missing email) from authentication provider.' };
         }
         
         const now = new Date();
         const firestoreDocumentData = {
             name: validatedData.name,
-            email: firebaseUser.email, // Safe to use now after the check
+            email: firebaseUser.email, 
             role: 'customer' as 'customer' | 'staff' | 'admin', // Default role
-            phone: undefined, 
+            phone: null, // Use null instead of undefined for Firestore compatibility
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
         };
@@ -209,9 +213,9 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
         const userProfileForSession: UserProfile = {
             id: firebaseUser.uid,
             name: validatedData.name,
-            email: firebaseUser.email, // Safe to use now
+            email: firebaseUser.email, 
             role: 'customer', 
-            phone: undefined,
+            phone: null, // Match what's in Firestore
             createdAt: now.toISOString(), 
             updatedAt: now.toISOString(), 
         };
@@ -246,14 +250,18 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
                 case 'auth/weak-password':
                     message = 'Password is too weak. Please choose a stronger password.';
                     break;
-                default: // Other Firebase Auth errors
-                    message = `Registration error: ${error.message || 'Please try again.'} (Auth Code: ${error.code})`;
+                default: // Other Firebase Auth errors or Firestore errors wrapped by Firebase
+                    // The error message now comes directly from the more specific catch block for Firestore errors
+                    message = `Registration error: ${error.message || 'Please try again.'} (Auth Code: ${error.code || 'N/A'})`;
             }
-        } else if (error.message) { // For non-Firebase Auth errors (e.g., Firestore, cookie setting)
-             message = `Registration process failed: ${error.message}`;
+        } else if (error.message) { // For non-Firebase Auth errors (e.g., direct Firestore error, cookie setting)
+             // Check if it's the specific Firestore "invalid data" error
+            if (error.message && error.message.includes("Unsupported field value: undefined")) {
+                message = `Registration error: Internal data format issue. Please contact support. (Details: ${error.message})`;
+            } else {
+                message = `Registration process failed: ${error.message}`;
+            }
         }
-        // If it's a Firestore permission error, error.message might contain "PERMISSION_DENIED"
-        // You could add more specific checks here if needed, e.g., if (error.message.includes('PERMISSION_DENIED')) { ... }
         return { success: false, message };
     }
 }
@@ -336,7 +344,7 @@ export async function getUserSession(): Promise<UserProfile | null> {
                 name: sessionData.name || 'User', 
                 email: sessionData.email, 
                 role: sessionData.role, 
-                phone: sessionData.phone || undefined, 
+                phone: sessionData.phone || null, 
             };
             console.log('[getUserSession] Session valid and parsed. User role from cookie:', userProfile.role, 'Returning user profile for:', userProfile.email);
             return userProfile;
@@ -351,4 +359,5 @@ export async function getUserSession(): Promise<UserProfile | null> {
     
 
     
+
 
