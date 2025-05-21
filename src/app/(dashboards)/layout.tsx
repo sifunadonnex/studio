@@ -4,7 +4,7 @@ import React from 'react';
 import { getUserSession, logoutUser, UserProfile } from '@/actions/auth'; // Import UserProfile type
 import DashboardClientLayout from './client-layout'; 
 import { redirect } from 'next/navigation';
-import { SessionProvider } from '@/contexts/session-context'; // Import SessionProvider
+// SessionProvider is no longer imported or used here, as it's in the root layout
 
 export default async function DashboardLayout({
   children,
@@ -23,11 +23,12 @@ export default async function DashboardLayout({
     // console.log("Dashboard Layout: Rendering with user profile:", session);
 
     return (
-      // Wrap DashboardClientLayout AND its children (which are passed to DashboardClientLayout) with SessionProvider
-      <SessionProvider value={session}>
-        <DashboardClientLayout userProfile={session} logoutAction={logoutUser}>
-            {children}
-       </DashboardClientLayout>
-      </SessionProvider>
+      // SessionProvider is now handled by the root layout.
+      // DashboardClientLayout receives userProfile as a prop.
+      // Deeper client components within {children} can use useUserSession() hook
+      // which will get its value from the root SessionProvider.
+      <DashboardClientLayout userProfile={session} logoutAction={logoutUser}>
+          {children}
+     </DashboardClientLayout>
     );
 }
