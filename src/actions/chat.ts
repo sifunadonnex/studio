@@ -9,11 +9,19 @@ import { getUserSession, UserProfile } from '@/actions/auth';
 // --- Schemas ---
 const SendMessageSchema = z.object({
   text: z.string().min(1, { message: "Message cannot be empty." }).max(1000, { message: "Message is too long." }),
-  // userId and userName will be derived from session server-side
+  // userId and userName will be derived from session server-side for user messages
 });
+
+const StaffSendMessageSchema = z.object({
+  targetUserId: z.string().min(1, { message: "Target user ID is required."}),
+  text: z.string().min(1, { message: "Message cannot be empty." }).max(1000, { message: "Message is too long." }),
+  // staffId and staffName will be derived from staff's session server-side
+});
+
 
 // --- Types ---
 export type SendMessageInput = z.infer<typeof SendMessageSchema>;
+export type StaffSendMessageInput = z.infer<typeof StaffSendMessageSchema>;
 
 export interface ChatMessage {
   id: string; // Firestore document ID
@@ -53,6 +61,8 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
     const validatedData = SendMessageSchema.parse(data);
     console.log('[sendUserMessageAction] Data validated:', validatedData);
 
+    // Messages are stored in a subcollection under the user's chat document
+    // e.g., chats/{userId}/messages/{messageId}
     const chatThreadRef = collection(db, 'chats', session.id, 'messages');
     console.log(`[sendUserMessageAction] Firestore collection path: chats/${session.id}/messages`);
     
@@ -68,9 +78,6 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
     const docRef = await addDoc(chatThreadRef, messageData);
     console.log('[sendUserMessageAction] Message saved to Firestore. Document ID:', docRef.id);
 
-    // For returning the saved message, we create a ChatMessage object
-    // Note: serverTimestamp() resolves on the server, so for immediate return, use current date.
-    // For actual timestamp, re-fetch or accept slight client/server discrepancy.
     const savedMessageForClient: ChatMessage = {
         id: docRef.id,
         senderId: messageData.senderId,
@@ -89,9 +96,8 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
       return { success: false, message: `Validation failed: ${messages}` };
     }
     console.error('[sendUserMessageAction] Firestore or other Error:', error);
-    // Try to get a more specific error message from Firebase
     let errorMessage = 'An unexpected error occurred while sending the message.';
-    if (error.code) { // Firebase errors often have a 'code' property
+    if (error.code) { 
         errorMessage = `Error sending message: ${error.message} (Code: ${error.code})`;
     } else if (error.message) {
         errorMessage = error.message;
@@ -102,6 +108,7 @@ export async function sendUserMessageAction(data: SendMessageInput): Promise<Cha
 
 /**
  * Fetches the chat history for a given user.
+ * Called by the user on their chat page.
  */
 export async function fetchChatHistoryAction(): Promise<FetchChatHistoryResponse> {
   const session = await getUserSession();
@@ -111,7 +118,7 @@ export async function fetchChatHistoryAction(): Promise<FetchChatHistoryResponse
 
   try {
     const messagesCollectionRef = collection(db, 'chats', session.id, 'messages');
-    const q = query(messagesCollectionRef, orderBy("timestamp", "asc")); // Fetch oldest first
+    const q = query(messagesCollectionRef, orderBy("timestamp", "asc")); 
     
     const querySnapshot = await getDocs(q);
     const chatMessages: ChatMessage[] = querySnapshot.docs.map(docSnap => {
@@ -130,9 +137,8 @@ export async function fetchChatHistoryAction(): Promise<FetchChatHistoryResponse
 
   } catch (error: any) {
     console.error('[fetchChatHistoryAction] Error fetching chat history:', error);
-    // Check for Firestore index errors specifically if applicable
     if (error.code === 'failed-precondition' && error.message.includes('index')) {
-        const detailedMessage = `Error: Firestore query requires an index. Please create it. Details: ${error.message}`;
+        const detailedMessage = `Error: Firestore query requires an index. Please create it for the 'messages' subcollection on the 'timestamp' field (ascending). Details: ${error.message}`;
         console.error(detailedMessage);
         return { success: false, message: detailedMessage, messages: [] };
     }
@@ -140,32 +146,74 @@ export async function fetchChatHistoryAction(): Promise<FetchChatHistoryResponse
   }
 }
 
-// Placeholder for staff to send messages (would be called from an admin/staff interface)
-// For now, staff messages would be manually added to Firestore or via a separate admin tool.
-// Example:
-/*
-export async function sendStaffMessageAction(userId: string, text: string, staffName: string = "Support Team"): Promise<ChatResponse> {
-    // Add admin role check here
-    try {
-        const chatThreadRef = collection(db, 'chats', userId, 'messages');
-        const messageData = {
-            senderId: "staff_system_id", // Or a specific staff member's ID
-            senderName: staffName,
-            senderType: 'staff' as 'user' | 'staff',
-            text: text,
-            timestamp: serverTimestamp(),
-        };
-        const docRef = await addDoc(chatThreadRef, messageData);
-        const savedMessageForClient: ChatMessage = {
-            id: docRef.id,
-            ...messageData,
-            timestamp: new Date().toISOString(),
-        };
-        return { success: true, message: "Staff message sent.", chatMessage: savedMessageForClient };
-    } catch (error) {
-        console.error('[sendStaffMessageAction] Error:', error);
-        return { success: false, message: 'Failed to send staff message.' };
-    }
-}
-*/
+/**
+ * @fileOverview Server action for staff members to send messages to users.
+ * This action would be called from a dedicated staff/admin chat interface (not yet built).
+ * It requires the staff member to be authenticated and have appropriate permissions.
+ */
+export async function sendStaffMessageAction(data: StaffSendMessageInput): Promise<ChatResponse> {
+  console.log('[sendStaffMessageAction] Action initiated by staff. Data received:', data);
+  const staffSession = await getUserSession();
 
+  if (!staffSession?.id || !staffSession.name) {
+    console.error('[sendStaffMessageAction] Authentication error: No staff session ID or name found. Session:', staffSession);
+    return { success: false, message: "Staff authentication required." };
+  }
+
+  // Role check: Ensure the sender is 'staff' or 'admin'
+  if (staffSession.role !== 'staff' && staffSession.role !== 'admin') {
+    console.error(`[sendStaffMessageAction] Authorization error: User ${staffSession.id} (${staffSession.role}) is not authorized to send staff messages.`);
+    return { success: false, message: "Unauthorized to send staff messages." };
+  }
+  
+  console.log(`[sendStaffMessageAction] Staff authenticated: ${staffSession.id} (${staffSession.name}), Role: ${staffSession.role}`);
+
+  try {
+    const validatedData = StaffSendMessageSchema.parse(data);
+    console.log('[sendStaffMessageAction] Data validated:', validatedData);
+
+    // Staff sends a message to a specific user's chat thread
+    const chatThreadRef = collection(db, 'chats', validatedData.targetUserId, 'messages');
+    console.log(`[sendStaffMessageAction] Firestore collection path: chats/${validatedData.targetUserId}/messages`);
+    
+    const messageData = {
+      senderId: staffSession.id, // Staff's own user ID
+      senderName: staffSession.name, // Staff's name
+      senderType: 'staff' as 'user' | 'staff',
+      text: validatedData.text,
+      timestamp: serverTimestamp(),
+    };
+    console.log('[sendStaffMessageAction] Staff message data to be saved:', messageData);
+
+    const docRef = await addDoc(chatThreadRef, messageData);
+    console.log('[sendStaffMessageAction] Staff message saved to Firestore. Document ID:', docRef.id);
+
+    const savedMessageForClient: ChatMessage = {
+        id: docRef.id,
+        senderId: messageData.senderId,
+        senderName: messageData.senderName,
+        senderType: messageData.senderType,
+        text: messageData.text,
+        timestamp: new Date().toISOString(), 
+    };
+
+    // Note: This response is for the staff member's action.
+    // The target user would see this message through their regular fetchChatHistoryAction or real-time listeners (if implemented).
+    return { success: true, message: `Message sent to user ${validatedData.targetUserId}.`, chatMessage: savedMessageForClient };
+
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
+      console.error('[sendStaffMessageAction] Validation Error:', messages);
+      return { success: false, message: `Validation failed: ${messages}` };
+    }
+    console.error('[sendStaffMessageAction] Firestore or other Error:', error);
+    let errorMessage = 'An unexpected error occurred while sending the staff message.';
+    if (error.code) { 
+        errorMessage = `Error sending message: ${error.message} (Code: ${error.code})`;
+    } else if (error.message) {
+        errorMessage = error.message;
+    }
+    return { success: false, message: errorMessage };
+  }
+}
