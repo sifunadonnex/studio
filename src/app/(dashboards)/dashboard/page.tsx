@@ -3,29 +3,188 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { Calendar, Wrench, MessageSquare, User, FileText, Bell, Car, BarChart2, Users, Settings, Info } from "lucide-react";
-import { getUserSession } from "@/actions/auth"; // Import session utility
+import { getUserSession } from "@/actions/auth";
 import { redirect } from 'next/navigation';
+import { db } from '@/lib/firebase/config';
+import { collection, query, where, getDocs, orderBy, Timestamp, limit,getCountFromServer } from 'firebase/firestore';
+import type { UserProfile } from '@/actions/auth';
+import type { Appointment } from '@/app/(dashboards)/appointments/page'; // Assuming Appointment type is exported
+import type { AdminSubscription } from '@/actions/subscription'; // Assuming Subscription type
+import { predictMaintenanceDate, PredictMaintenanceInput, PredictMaintenanceOutput } from '@/ai/flows/predictive-maintenance';
+import { format } from 'date-fns';
 
-// This is now a Server Component
+interface CustomerData {
+    upcomingAppointment: Appointment | null;
+    maintenancePrediction: (PredictMaintenanceOutput & { vehicleNickname: string }) | null;
+    activeSubscription: AdminSubscription | null;
+    lastChatMessage: { text: string; senderType: 'user' | 'staff' } | null;
+}
+
+interface AdminData {
+    todaysBookingsCount: number;
+    activeSubscriptionsCount: number;
+    totalChatsCount: number;
+    totalUsersCount: number;
+}
+
 
 export default async function DashboardPage() {
     const session = await getUserSession();
 
     if (!session) {
-        // This should ideally be caught by middleware, but serves as a backup
         redirect('/login?redirect=/dashboard');
     }
 
     const userRole = session.role;
+    let customerData: CustomerData | null = null;
+    let adminData: AdminData | null = null;
+
+    if (userRole === "customer" && session.id) {
+        // Fetch Upcoming Appointment
+        let upcomingAppointment: Appointment | null = null;
+        try {
+            const todayStr = format(new Date(), 'yyyy-MM-dd');
+            const appointmentsQuery = query(
+                collection(db, "appointments"),
+                where("userId", "==", session.id),
+                where("date", ">=", todayStr), // Appointments from today onwards
+                where("status", "in", ["Pending", "Confirmed"]),
+                orderBy("date", "asc"),
+                orderBy("time", "asc"),
+                limit(1)
+            );
+            const appointmentSnapshot = await getDocs(appointmentsQuery);
+            if (!appointmentSnapshot.empty) {
+                const docData = appointmentSnapshot.docs[0].data();
+                upcomingAppointment = {
+                    id: appointmentSnapshot.docs[0].id,
+                    serviceId: docData.serviceId,
+                    serviceName: docData.serviceName,
+                    date: docData.date,
+                    time: docData.time,
+                    vehicleMake: docData.vehicleMake,
+                    vehicleModel: docData.vehicleModel || null,
+                    status: docData.status as 'Pending' | 'Confirmed' | 'Completed' | 'Cancelled',
+                    createdAt: docData.createdAt, // Firestore Timestamp
+                } as Appointment;
+            }
+        } catch (e) {
+            console.error("Error fetching upcoming appointment:", e);
+        }
+
+        // Fetch Maintenance Prediction for the first vehicle
+        let maintenancePrediction: (PredictMaintenanceOutput & { vehicleNickname: string }) | null = null;
+        try {
+            const vehiclesQuery = query(collection(db, `users/${session.id}/vehicles`), limit(1));
+            const vehicleSnapshot = await getDocs(vehiclesQuery);
+            if (!vehicleSnapshot.empty) {
+                const vehicle = vehicleSnapshot.docs[0].data();
+                if (vehicle.serviceHistory) {
+                    const predictionInput: PredictMaintenanceInput = {
+                        vehicleId: vehicleSnapshot.docs[0].id,
+                        serviceHistory: vehicle.serviceHistory,
+                    };
+                    const predictionOutput = await predictMaintenanceDate(predictionInput);
+                    maintenancePrediction = { ...predictionOutput, vehicleNickname: vehicle.nickname || 'Your Vehicle' };
+                }
+            }
+        } catch (e) {
+            console.error("Error fetching maintenance prediction:", e);
+        }
+        
+        // Fetch Active Subscription
+        let activeSubscription: AdminSubscription | null = null;
+        try {
+            const subsQuery = query(
+                collection(db, "subscriptions"),
+                where("userId", "==", session.id),
+                where("status", "==", "active"),
+                limit(1)
+            );
+            const subsSnapshot = await getDocs(subsQuery);
+            if (!subsSnapshot.empty) {
+                const subData = subsSnapshot.docs[0].data();
+                activeSubscription = {
+                    id: subsSnapshot.docs[0].id,
+                    userId: subData.userId,
+                    customerName: session.name, // Assuming we have session.name
+                    customerEmail: session.email, // Assuming we have session.email
+                    planId: subData.planId,
+                    planName: subData.planName,
+                    status: subData.status as 'active' | 'cancelled' | 'expired' | 'payment_failed' | 'pending',
+                    startDate: subData.startDate instanceof Timestamp ? subData.startDate.toDate().toISOString() : subData.startDate,
+                    endDate: subData.endDate instanceof Timestamp ? subData.endDate.toDate().toISOString() : subData.endDate,
+                    nextBillingDate: subData.nextBillingDate instanceof Timestamp ? subData.nextBillingDate.toDate().toISOString() : subData.nextBillingDate,
+                    price: subData.price,
+                    currency: subData.currency,
+                    createdAt: subData.createdAt instanceof Timestamp ? subData.createdAt.toDate().toISOString() : subData.createdAt,
+                    updatedAt: subData.updatedAt instanceof Timestamp ? subData.updatedAt.toDate().toISOString() : subData.updatedAt,
+                };
+            }
+        } catch (e) {
+            console.error("Error fetching active subscription:", e);
+        }
+
+        // Fetch Last Chat Message
+        let lastChatMessage: { text: string; senderType: 'user' | 'staff' } | null = null;
+        try {
+            const chatMessagesQuery = query(
+                collection(db, `chats/${session.id}/messages`),
+                orderBy("timestamp", "desc"),
+                limit(1)
+            );
+            const chatSnapshot = await getDocs(chatMessagesQuery);
+            if (!chatSnapshot.empty) {
+                const msgData = chatSnapshot.docs[0].data();
+                lastChatMessage = {
+                    text: msgData.text.substring(0, 100) + (msgData.text.length > 100 ? "..." : ""), // Snippet
+                    senderType: msgData.senderType,
+                };
+            }
+        } catch (e) {
+            console.error("Error fetching last chat message:", e);
+        }
+
+        customerData = { upcomingAppointment, maintenancePrediction, activeSubscription, lastChatMessage };
+
+    } else if (userRole === "admin") {
+        let todaysBookingsCount = 0;
+        let activeSubscriptionsCount = 0;
+        let totalChatsCount = 0;
+        let totalUsersCount = 0;
+
+        try {
+            const todayStr = format(new Date(), 'yyyy-MM-dd');
+            const bookingsQuery = query(collection(db, "appointments"), where("date", "==", todayStr));
+            const bookingsSnapshot = await getCountFromServer(bookingsQuery);
+            todaysBookingsCount = bookingsSnapshot.data().count;
+
+            const activeSubsQuery = query(collection(db, "subscriptions"), where("status", "==", "active"));
+            const activeSubsSnapshot = await getCountFromServer(activeSubsQuery);
+            activeSubscriptionsCount = activeSubsSnapshot.data().count;
+
+            const chatsQuery = collection(db, "chats"); // Counts documents in 'chats' collection
+            const chatsSnapshot = await getCountFromServer(chatsQuery);
+            totalChatsCount = chatsSnapshot.data().count;
+
+            const usersQuery = collection(db, "users");
+            const usersSnapshot = await getCountFromServer(usersQuery);
+            totalUsersCount = usersSnapshot.data().count;
+
+        } catch (e) {
+            console.error("Error fetching admin dashboard data:", e);
+            // Keep counts at 0 if there's an error
+        }
+        adminData = { todaysBookingsCount, activeSubscriptionsCount, totalChatsCount, totalUsersCount };
+    }
+
 
     return (
         <div className="container mx-auto px-4 py-12">
              <div className="flex justify-between items-center mb-8">
                 <h1 className="text-3xl font-bold text-primary">Dashboard</h1>
-                 {/* Logout button is now in the Sidebar */}
              </div>
 
-            {/* Welcome Message */}
              <Card className="mb-8 bg-secondary border-none">
                  <CardHeader>
                      <CardTitle>Welcome back, {session.name || 'User'}!</CardTitle>
@@ -33,13 +192,10 @@ export default async function DashboardPage() {
                 </CardHeader>
              </Card>
 
-
-            {/* Content varies based on role */}
-            {userRole === "customer" && <CustomerDashboard />}
+            {userRole === "customer" && <CustomerDashboard initialData={customerData} />}
             {userRole === "staff" && <StaffDashboard />}
-            {userRole === "admin" && <AdminDashboard />}
+            {userRole === "admin" && <AdminDashboard initialData={adminData} />}
 
-            {/* Fallback for unknown role - Should not happen if session is valid */}
             {userRole !== "customer" && userRole !== "staff" && userRole !== "admin" && (
                 <Card>
                     <CardHeader>
@@ -56,63 +212,90 @@ export default async function DashboardPage() {
 
 
 // --- Role-Specific Dashboard Components ---
+interface CustomerDashboardProps {
+  initialData: CustomerData | null;
+}
 
-function CustomerDashboard() {
-  // TODO: Fetch real data (upcoming appointment, prediction, messages) server-side and pass as props
+function CustomerDashboard({ initialData }: CustomerDashboardProps) {
+  const { upcomingAppointment, maintenancePrediction, activeSubscription, lastChatMessage } = initialData || {};
+  
+  const formatDate = (dateString: string | undefined) => {
+    if (!dateString) return 'N/A';
+    try {
+      return format(new Date(dateString), 'PPP'); // e.g., Jan 1, 2024
+    } catch (e) {
+      return dateString;
+    }
+  };
+  
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-      {/* Upcoming Appointment */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Calendar className="h-5 w-5" /> Upcoming Appointment</CardTitle>
           <CardDescription>Your next scheduled service.</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-muted-foreground">No upcoming appointments.</p>
-          {/* <p><strong>Service:</strong> Standard Oil Change</p>
-          <p><strong>Date:</strong> October 26, 2024</p>
-          <p><strong>Time:</strong> 10:00 AM</p> */}
+          {upcomingAppointment ? (
+            <>
+              <p><strong>Service:</strong> {upcomingAppointment.serviceName}</p>
+              <p><strong>Date:</strong> {formatDate(upcomingAppointment.date)}</p>
+              <p><strong>Time:</strong> {upcomingAppointment.time}</p>
+            </>
+          ) : (
+            <p className="text-muted-foreground">No upcoming appointments.</p>
+          )}
           <Link href="/appointments" passHref>
             <Button variant="outline" size="sm" className="mt-4 w-full">Manage Appointments</Button>
           </Link>
         </CardContent>
       </Card>
 
-      {/* Predictive Maintenance */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Bell className="h-5 w-5 text-accent" /> Predictive Maintenance</CardTitle>
-          <CardDescription>Estimated next service needed.</CardDescription>
+          <CardDescription>Estimated next service needed for {maintenancePrediction?.vehicleNickname || 'your vehicle'}.</CardDescription>
         </CardHeader>
         <CardContent>
-           <p className="text-muted-foreground">No maintenance predictions available yet.</p>
-           <p className="text-xs text-muted-foreground mt-1">Add a vehicle and service history in your profile to enable predictions.</p>
-           {/* <p>Next recommended service: <strong>Brake Inspection</strong></p>
-           <p>Estimated Date: <strong>November 15, 2024</strong></p> */}
+           {maintenancePrediction ? (
+             <>
+                <p>Next recommended service: <strong>{maintenancePrediction.reasoning.split(':')[0] || 'Check Required'}</strong></p>
+                <p>Estimated Date: <strong>{formatDate(maintenancePrediction.predictedMaintenanceDate)}</strong></p>
+                <p className="text-xs text-muted-foreground mt-1">{maintenancePrediction.reasoning}</p>
+             </>
+           ) : (
+             <>
+                <p className="text-muted-foreground">No maintenance predictions available yet.</p>
+                <p className="text-xs text-muted-foreground mt-1">Add a vehicle and its service history in your profile to enable predictions.</p>
+             </>
+           )}
            <Link href="/maintenance/predictive" passHref>
                <Button variant="secondary" size="sm" className="mt-4 w-full">View Details</Button>
            </Link>
         </CardContent>
       </Card>
 
-      {/* My Subscription */}
        <Card>
         <CardHeader>
            <CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5" /> My Subscription</CardTitle>
             <CardDescription>Your current plan details.</CardDescription>
         </CardHeader>
          <CardContent>
-            <p className="text-muted-foreground">No active subscription found.</p>
-            {/* <p><strong>Plan:</strong> Monthly Care Plan</p>
-            <p><strong>Status:</strong> Active</p>
-             <p><strong>Next Billing Date:</strong> November 1, 2024</p> */}
+            {activeSubscription ? (
+                <>
+                    <p><strong>Plan:</strong> {activeSubscription.planName}</p>
+                    <p><strong>Status:</strong> <span className="capitalize">{activeSubscription.status}</span></p>
+                    <p><strong>Next Billing:</strong> {formatDate(activeSubscription.nextBillingDate || undefined)}</p>
+                </>
+            ) : (
+                <p className="text-muted-foreground">No active subscription found.</p>
+            )}
            <Link href="/subscriptions/manage" passHref>
                 <Button variant="outline" size="sm" className="mt-4 w-full">Manage Subscription</Button>
             </Link>
         </CardContent>
        </Card>
 
-       {/* Quick Actions */}
        <Card className="md:col-span-2 lg:col-span-1">
          <CardHeader>
             <CardTitle>Quick Actions</CardTitle>
@@ -133,22 +316,26 @@ function CustomerDashboard() {
          </CardContent>
        </Card>
 
-        {/* Recent Messages (Placeholder) */}
          <Card className="md:col-span-2">
             <CardHeader>
                 <CardTitle className="flex items-center gap-2"><MessageSquare className="h-5 w-5" /> Recent Messages</CardTitle>
                  <CardDescription>Latest communications with our team.</CardDescription>
             </CardHeader>
             <CardContent>
-                 <p className="text-muted-foreground text-sm p-4 border rounded-md">
-                    No recent messages.
-                 </p>
+                {lastChatMessage ? (
+                    <p className="text-muted-foreground text-sm p-4 border rounded-md">
+                        <strong>{lastChatMessage.senderType === 'user' ? 'You' : 'Support'}:</strong> {lastChatMessage.text}
+                    </p>
+                ) : (
+                    <p className="text-muted-foreground text-sm p-4 border rounded-md">
+                        No recent messages.
+                    </p>
+                )}
                  <Link href="/chat" passHref>
                      <Button variant="link" size="sm" className="mt-2">View All Messages</Button>
                 </Link>
             </CardContent>
          </Card>
-
     </div>
   );
 }
@@ -163,7 +350,8 @@ function StaffDashboard() {
         </CardHeader>
          <CardContent>
            <p className="text-muted-foreground">No appointments scheduled for today.</p>
-           <Link href="/staff/schedule" passHref> {/* Adjust link as needed */}
+           {/* Staff schedule might link to /admin/appointments or a dedicated staff schedule page */}
+           <Link href="/admin/appointments" passHref>
                 <Button variant="outline" size="sm" className="mt-4">View Full Schedule</Button>
             </Link>
         </CardContent>
@@ -176,9 +364,9 @@ function StaffDashboard() {
          </CardHeader>
           <CardContent>
              <p className="text-muted-foreground text-sm p-2 border rounded-md mb-2">
-                 No active customer chats.
+                 No active customer chats requiring attention.
             </p>
-            <Link href="/staff/chats" passHref> {/* Adjust link as needed */}
+            <Link href="/staff/chats" passHref>
                  <Button variant="link" size="sm" className="mt-2">Open Chat Interface</Button>
             </Link>
          </CardContent>
@@ -187,12 +375,12 @@ function StaffDashboard() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Bell className="h-5 w-5 text-accent" /> Maintenance Alerts</CardTitle>
-          <CardDescription>Vehicles flagged for upcoming service.</CardDescription>
+          <CardDescription>Vehicles flagged for upcoming service by customers.</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-muted-foreground text-sm">No maintenance alerts at this time.</p>
-           <Link href="/maintenance/predictive" passHref> {/* Adjust link as needed */}
-              <Button variant="outline" size="sm" className="mt-4 w-full">View All Alerts</Button>
+          <p className="text-muted-foreground text-sm">No customer-activated maintenance alerts at this time.</p>
+           <Link href="/maintenance/predictive" passHref> 
+              <Button variant="outline" size="sm" className="mt-4 w-full">View Predictive Insights</Button>
           </Link>
         </CardContent>
       </Card>
@@ -200,7 +388,18 @@ function StaffDashboard() {
   );
 }
 
-function AdminDashboard() {
+interface AdminDashboardProps {
+  initialData: AdminData | null;
+}
+
+function AdminDashboard({ initialData }: AdminDashboardProps) {
+  const { 
+    todaysBookingsCount = 0, 
+    activeSubscriptionsCount = 0, 
+    totalChatsCount = 0, 
+    totalUsersCount = 0 
+  } = initialData || {};
+
   return (
      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <Card>
@@ -208,8 +407,8 @@ function AdminDashboard() {
                  <CardTitle className="text-lg">Today's Bookings</CardTitle>
              </CardHeader>
             <CardContent>
-                 <p className="text-3xl font-bold">0</p>
-                 <p className="text-xs text-muted-foreground">N/A</p>
+                 <p className="text-3xl font-bold">{todaysBookingsCount}</p>
+                 <p className="text-xs text-muted-foreground">{todaysBookingsCount > 0 ? 'View in Manage Appointments' : 'No bookings for today'}</p>
             </CardContent>
         </Card>
         <Card>
@@ -217,26 +416,26 @@ function AdminDashboard() {
                  <CardTitle className="text-lg">Active Subscriptions</CardTitle>
              </CardHeader>
              <CardContent>
-                <p className="text-3xl font-bold">0</p>
-                <p className="text-xs text-muted-foreground">N/A</p>
+                <p className="text-3xl font-bold">{activeSubscriptionsCount}</p>
+                <p className="text-xs text-muted-foreground">{activeSubscriptionsCount > 0 ? 'View in Manage Subscriptions' : 'No active subscriptions'}</p>
              </CardContent>
         </Card>
        <Card>
             <CardHeader>
-                <CardTitle className="text-lg">Pending Chats</CardTitle>
+                <CardTitle className="text-lg">Customer Chats</CardTitle>
              </CardHeader>
             <CardContent>
-                 <p className="text-3xl font-bold">0</p>
-                <p className="text-xs text-muted-foreground">N/A</p>
+                 <p className="text-3xl font-bold">{totalChatsCount}</p>
+                <p className="text-xs text-muted-foreground">{totalChatsCount > 0 ? 'View in Staff Chats' : 'No customer chats yet'}</p>
              </CardContent>
        </Card>
         <Card>
              <CardHeader>
-                 <CardTitle className="text-lg">Est. Monthly Revenue</CardTitle>
+                 <CardTitle className="text-lg">Total Users</CardTitle>
              </CardHeader>
             <CardContent>
-                 <p className="text-3xl font-bold">KES 0</p>
-                 <p className="text-xs text-muted-foreground">N/A</p>
+                 <p className="text-3xl font-bold">{totalUsersCount}</p>
+                 <p className="text-xs text-muted-foreground">{totalUsersCount > 0 ? 'View in Manage Users' : 'No registered users'}</p>
              </CardContent>
        </Card>
 
@@ -254,7 +453,7 @@ function AdminDashboard() {
 
         <Card className="lg:col-span-2">
             <CardHeader>
-                <CardTitle>Reports</CardTitle>
+                <CardTitle>Reports & Insights</CardTitle>
                  <CardDescription>Generate insights from garage data.</CardDescription>
             </CardHeader>
             <CardContent className="grid grid-cols-1 gap-2 text-sm">
@@ -264,7 +463,7 @@ function AdminDashboard() {
                  <div className="p-4 border rounded-md bg-muted/50 mt-2">
                     <div className="flex items-center gap-2">
                         <Info className="h-5 w-5 text-muted-foreground"/>
-                        <p className="text-sm text-muted-foreground">Reporting features are under development. </p>
+                        <p className="text-sm text-muted-foreground">Detailed reporting and AI insights are available in the Reports section.</p>
                     </div>
                 </div>
             </CardContent>
@@ -272,3 +471,21 @@ function AdminDashboard() {
      </div>
   );
 }
+
+// Ensure Appointment type is defined or imported for CustomerDashboard
+// For example, if it's in /app/(dashboards)/appointments/page.tsx:
+// export interface Appointment { ... }
+// Then import it here. For now, assuming a basic structure if not imported.
+interface Appointment {
+  id: string; 
+  serviceId: string;
+  serviceName: string;
+  date: string;
+  time: string;
+  vehicleMake: string;
+  vehicleModel?: string | null;
+  status: 'Pending' | 'Confirmed' | 'Completed' | 'Cancelled';
+  createdAt: Timestamp; 
+}
+
+    
