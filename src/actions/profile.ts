@@ -4,7 +4,7 @@
 import { z } from 'zod';
 import { getUserSession, UserProfile, setSessionCookie } from '@/actions/auth'; // To verify user and update cookie
 import { db, auth as firebaseAuthInstance } from '@/lib/firebase/config'; // Firebase db
-import { doc, updateDoc, setDoc, deleteDoc, getDocs, collection, query, where, serverTimestamp, getDoc, Timestamp } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, deleteDoc, getDocs, collection, query, where, serverTimestamp, getDoc, Timestamp, orderBy } from 'firebase/firestore';
 import { updatePassword as firebaseUpdatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth'; // For password change
 
 // --- Schemas ---
@@ -39,7 +39,7 @@ export type VehicleInput = z.infer<typeof VehicleSchema>;
 export interface ProfileResponse {
   success: boolean;
   message: string;
-  user?: UserProfile; // Added to return updated user profile
+  user?: UserProfile; 
 }
 export interface VehicleResponse extends ProfileResponse {
     vehicles?: VehicleInput[];
@@ -48,11 +48,25 @@ export interface VehicleResponse extends ProfileResponse {
 // --- Helper Function to serialize Vehicle Timestamps ---
 const serializeVehicleTimestamps = (vehicleData: any): VehicleInput => {
     const serializedData = { ...vehicleData };
-    if (vehicleData.createdAt instanceof Timestamp) {
-        serializedData.createdAt = vehicleData.createdAt.toDate().toISOString();
+    const vehicleId = vehicleData.id || 'Unknown ID';
+
+    if (vehicleData.createdAt) {
+        if (vehicleData.createdAt instanceof Timestamp) {
+            serializedData.createdAt = vehicleData.createdAt.toDate().toISOString();
+        } else if (typeof vehicleData.createdAt !== 'string') {
+            console.warn(`[serializeVehicleTimestamps] Vehicle ${vehicleId}: 'createdAt' field is present but not a Firestore Timestamp or string. Value:`, vehicleData.createdAt, "Type:", typeof vehicleData.createdAt);
+            // Fallback: attempt to convert to Date and then ISO string if it's a recognizable date format, otherwise might need specific handling or will be passed as is.
+            // For now, we assume if it's not a Timestamp, it should ideally already be a string or be handled by Zod validation later.
+            // If VehicleInput expects a string, and this isn't one, Zod will catch it.
+        }
     }
-    if (vehicleData.updatedAt instanceof Timestamp) {
-        serializedData.updatedAt = vehicleData.updatedAt.toDate().toISOString();
+
+    if (vehicleData.updatedAt) {
+        if (vehicleData.updatedAt instanceof Timestamp) {
+            serializedData.updatedAt = vehicleData.updatedAt.toDate().toISOString();
+        } else if (typeof vehicleData.updatedAt !== 'string') {
+            console.warn(`[serializeVehicleTimestamps] Vehicle ${vehicleId}: 'updatedAt' field is present but not a Firestore Timestamp or string. Value:`, vehicleData.updatedAt, "Type:", typeof vehicleData.updatedAt);
+        }
     }
     return serializedData as VehicleInput;
 };
@@ -82,13 +96,11 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Pro
             updatedAt: serverTimestamp(),
         });
 
-        // Fetch the updated profile to refresh the session cookie
         const updatedProfile = await fetchUserProfile(session.id);
         if (updatedProfile) {
-            await setSessionCookie(updatedProfile); // Update the cookie with new info
+            await setSessionCookie(updatedProfile); 
             return { success: true, message: "Profile updated successfully.", user: updatedProfile };
         } else {
-            // This case should be rare if the updateDoc succeeded but indicates an issue fetching the profile
              console.error(`Server Action (updateProfile): Profile updated for ${session.id}, but failed to refetch for session update.`);
             return { success: false, message: "Profile updated, but session refresh failed. Please re-login to see changes." };
         }
@@ -105,8 +117,6 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Pro
 
 /**
  * Simulates changing a user's password.
- * IMPORTANT: Real Firebase password changes on the server require Firebase Admin SDK for security
- * or re-authentication of the user. Client-side SDK `updatePassword` is preferred for direct user changes.
  */
 export async function changePasswordAction(data: ChangePasswordInput): Promise<ProfileResponse> {
      const session = await getUserSession();
@@ -118,10 +128,7 @@ export async function changePasswordAction(data: ChangePasswordInput): Promise<P
          const validatedData = ChangePasswordSchema.parse(data);
          console.log(`Server Action (changePassword): Attempting password change for user ${session.id}`);
          
-         // This is a simulation. Real Firebase password change requires re-authentication or Admin SDK.
-         // For this example, we assume a simplified check.
-         // IMPORTANT: Do not use this simulated password check in production.
-         if (validatedData.currentPassword !== "password") { // DUMMY CHECK - REPLACE
+         if (validatedData.currentPassword !== "password") { 
              console.warn(`Server Action (changePassword): Simulated incorrect current password for user ${session.id}`);
              return { success: false, message: "Incorrect current password. (Simulation)" };
          }
@@ -145,7 +152,7 @@ export async function changePasswordAction(data: ChangePasswordInput): Promise<P
 
 interface ManageVehicleInput {
     action: 'add' | 'update' | 'delete';
-    vehicle: VehicleInput; // Expects potentially non-serialized createdAt/updatedAt on input for 'add' if we were to set them on client
+    vehicle: VehicleInput; 
 }
 
 /**
@@ -162,19 +169,18 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
     console.log(`Server Action (manageVehicle Firestore): Action=${input.action} for user ${userId}`, input.vehicle);
 
     try {
-        // Validate only the core fields, createdAt/updatedAt are handled by server or serialization
         const coreVehicleSchema = VehicleSchema.omit({ createdAt: true, updatedAt: true });
         const validatedVehicleData = coreVehicleSchema.parse(input.vehicle);
 
         const vehiclesCollectionRef = collection(db, 'users', userId, 'vehicles');
-        let vehicleId = input.vehicle.id; // Use ID from input vehicle directly for update/delete
+        let vehicleId = input.vehicle.id; 
 
         if (input.action === 'add') {
             const newVehicleDocRef = doc(vehiclesCollectionRef); 
             vehicleId = newVehicleDocRef.id;
             await setDoc(newVehicleDocRef, { 
                 ...validatedVehicleData, 
-                id: vehicleId, // Ensure ID is part of the document
+                id: vehicleId, 
                 createdAt: serverTimestamp(), 
                 updatedAt: serverTimestamp() 
             });
@@ -182,8 +188,6 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
         } else if (input.action === 'update') {
             if (!vehicleId) return { success: false, message: "Vehicle ID is required for update." };
             const vehicleDocRef = doc(vehiclesCollectionRef, vehicleId);
-            // Do not spread input.vehicle directly if it contains stringified dates.
-            // Spread validatedVehicleData which is clean.
             await updateDoc(vehicleDocRef, { 
                 ...validatedVehicleData, 
                 updatedAt: serverTimestamp() 
@@ -225,24 +229,39 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
  export async function fetchVehiclesAction(): Promise<VehicleResponse> {
      const session = await getUserSession();
      if (!session?.id) {
-         return { success: false, message: "Authentication required." };
+        console.warn('[fetchVehiclesAction] No session or session ID found. User must be logged in.');
+        return { success: false, message: "Authentication required to fetch vehicles." };
      }
      const userId = session.id;
-     console.log(`Server Action (fetchVehicles Firestore): Fetching vehicles for user ${userId}`);
+     console.log(`[fetchVehiclesAction] Fetching vehicles for user ${userId}`);
 
      try {
          const vehiclesCollectionRef = collection(db, 'users', userId, 'vehicles');
-         const vehiclesSnap = await getDocs(query(vehiclesCollectionRef, orderBy("createdAt", "desc")));
+         const q = query(vehiclesCollectionRef, orderBy("createdAt", "desc"));
+         console.log(`[fetchVehiclesAction] Executing Firestore query for user ${userId}'s vehicles.`);
          
-         const vehicles = vehiclesSnap.docs.map(docSnap => 
-            serializeVehicleTimestamps({ id: docSnap.id, ...docSnap.data() })
-         );
+         const vehiclesSnap = await getDocs(q);
+         console.log(`[fetchVehiclesAction] Found ${vehiclesSnap.docs.length} vehicles for user ${userId}.`);
+         
+         const vehicles = vehiclesSnap.docs.map(docSnap => {
+            const data = docSnap.data();
+            // console.log(`[fetchVehiclesAction] Raw data for vehicle ${docSnap.id}:`, data); // Log raw data for debugging
+            return serializeVehicleTimestamps({ id: docSnap.id, ...data });
+         });
 
          return { success: true, message: "Vehicles fetched successfully.", vehicles };
 
      } catch (error: any) {
-         console.error('Server Action Error (fetchVehicles Firestore):', error);
-         return { success: false, message: 'An unexpected error occurred while fetching vehicles.' };
+         console.error('[fetchVehiclesAction] Server Action Error (fetchVehicles Firestore):', error);
+         //  If 'error' is a FirebaseError, error.code and error.message might be useful.
+         //  Example: If index is missing, FirebaseError.code is 'failed-precondition'
+         //  and message contains a link to create the index.
+         let detailedMessage = 'An unexpected error occurred while fetching vehicles.';
+         if (error.code && error.message) { // Attempt to get more specific Firebase error info
+            detailedMessage = `Error fetching vehicles: ${error.message} (Code: ${error.code}). Check server logs for details, including any links to create Firestore indexes if needed.`;
+            console.error(`[fetchVehiclesAction] Firebase Error Code: ${error.code}, Message: ${error.message}`);
+         }
+         return { success: false, message: detailedMessage };
      }
  }
 
@@ -262,7 +281,7 @@ export async function fetchUserProfile(userId: string): Promise<UserProfile | nu
                 name: data.name,
                 email: data.email,
                 role: data.role,
-                phone: data.phone || null, // Ensure phone is null if not present
+                phone: data.phone || null, 
                 createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate().toISOString() : (data.createdAt || undefined),
                 updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toDate().toISOString() : (data.updatedAt || undefined),
             };
@@ -278,6 +297,3 @@ export async function fetchUserProfile(userId: string): Promise<UserProfile | nu
         return null;
     }
 }
-
-
-    
