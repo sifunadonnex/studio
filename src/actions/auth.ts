@@ -77,6 +77,8 @@ export async function setSessionCookie(userData: UserProfile) {
 
     console.log('[setSessionCookie] Attempting to set cookie "session" with options:', JSON.stringify(cookieOptions));
     console.log('[setSessionCookie] Session data to be stringified (first 100 chars):', JSON.stringify(sessionData).substring(0, 100) + "...");
+    console.log('[setSessionCookie] Entire sessionData object being stringified:', sessionData);
+
 
     try {
         cookieStore.set('session', JSON.stringify(sessionData), cookieOptions);
@@ -111,10 +113,10 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
             console.log('[loginUser] Firestore data received:', firestoreData);
             console.log('[loginUser] Firestore data role:', firestoreData.role);
 
-            if (!firestoreData.role) {
-                console.error('[loginUser] CRITICAL: User role not found in Firestore for user:', firebaseUser.uid);
+            if (!firestoreData.role || !['customer', 'staff', 'admin'].includes(firestoreData.role)) {
+                console.error(`[loginUser] CRITICAL: User role '${firestoreData.role}' is missing or invalid in Firestore for user:`, firebaseUser.uid);
                 await firebaseSignOut(auth); 
-                return { success: false, message: 'User profile is incomplete (missing role). Please contact support.' };
+                return { success: false, message: 'User profile is incomplete or has an invalid role. Please contact support.' };
             }
 
             const userProfile: UserProfile = {
@@ -185,15 +187,14 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
         const userCredential = await createUserWithEmailAndPassword(auth, validatedData.email, validatedData.password);
         const firebaseUser = userCredential.user;
 
-        if (!firebaseUser) { // Initial check if firebaseUser itself is null
+        if (!firebaseUser) { 
             console.error('[registerUser] Firebase user creation failed, user object is null.');
             return { success: false, message: 'Registration process failed: no user data received from authentication provider.' };
         }
-        if (!firebaseUser.email) { // Check specifically for email
-             console.error('[registerUser] Firebase user created, but email is missing. This should not happen for email/password auth.');
-             // Attempt to sign out the partially created user to avoid orphaned accounts if possible.
+        if (!firebaseUser.email) { 
+             console.error('[registerUser] Firebase user created, but email is missing.');
              await firebaseSignOut(auth);
-             return { success: false, message: 'Registration process failed due to incomplete user data (missing email) from authentication provider.' };
+             return { success: false, message: 'Registration process failed due to incomplete user data (missing email).' };
         }
         
         const now = new Date();
@@ -201,7 +202,7 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
             name: validatedData.name,
             email: firebaseUser.email, 
             role: 'customer' as 'customer' | 'staff' | 'admin', // Default role
-            phone: null, // Use null instead of undefined for Firestore compatibility
+            phone: null, 
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
         };
@@ -215,7 +216,7 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
             name: validatedData.name,
             email: firebaseUser.email, 
             role: 'customer', 
-            phone: null, // Match what's in Firestore
+            phone: null, 
             createdAt: now.toISOString(), 
             updatedAt: now.toISOString(), 
         };
@@ -239,7 +240,7 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
 
         console.error('[registerUser] Server Action Error (registerUser Firebase):', error);
         let message = 'An unexpected error occurred during registration.';
-        if (error.code) { // Firebase Auth specific error codes
+        if (error.code) { 
             switch (error.code) {
                 case 'auth/email-already-in-use':
                     message = 'An account with this email already exists.';
@@ -250,12 +251,10 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
                 case 'auth/weak-password':
                     message = 'Password is too weak. Please choose a stronger password.';
                     break;
-                default: // Other Firebase Auth errors or Firestore errors wrapped by Firebase
-                    // The error message now comes directly from the more specific catch block for Firestore errors
+                default: 
                     message = `Registration error: ${error.message || 'Please try again.'} (Auth Code: ${error.code || 'N/A'})`;
             }
-        } else if (error.message) { // For non-Firebase Auth errors (e.g., direct Firestore error, cookie setting)
-             // Check if it's the specific Firestore "invalid data" error
+        } else if (error.message) { 
             if (error.message && error.message.includes("Unsupported field value: undefined")) {
                 message = `Registration error: Internal data format issue. Please contact support. (Details: ${error.message})`;
             } else {
@@ -288,7 +287,6 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
         if (error.code === 'auth/invalid-email') {
              return { success: false, message: 'Invalid email format.' };
         }
-        // For security reasons, even if user not found, present a generic success message.
         return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
     }
 }
@@ -303,8 +301,6 @@ export async function logoutUser(): Promise<{ success: boolean }> {
         console.log('[logoutUser] Deleting "session" cookie.');
         cookieStore.delete('session'); 
         console.log('[logoutUser] Session cookie deleted from store.');
-        // No need to call firebaseSignOut(auth) here if we are only relying on the cookie for session state.
-        // If you also maintain Firebase client-side auth state and want to clear it, you would do it on the client.
         return { success: true };
     } catch (error) {
         console.error('[logoutUser] Server Action Error (logoutUser):', error);
@@ -337,8 +333,14 @@ export async function getUserSession(): Promise<UserProfile | null> {
 
     try {
         const sessionData = JSON.parse(sessionCookie.value);
+        console.log('[getUserSession] Parsed session data from cookie:', sessionData);
+
 
         if (sessionData && sessionData.userId && sessionData.email && sessionData.role && sessionData.loggedInAt) {
+             if (!['customer', 'staff', 'admin'].includes(sessionData.role)) {
+                console.warn(`[getUserSession] Parsed session data has an invalid role: '${sessionData.role}'. Returning null.`);
+                return null;
+            }
             const userProfile: UserProfile = { 
                 id: sessionData.userId, 
                 name: sessionData.name || 'User', 
@@ -359,5 +361,6 @@ export async function getUserSession(): Promise<UserProfile | null> {
     
 
     
+
 
 
