@@ -63,7 +63,7 @@ export async function setSessionCookie(userData: UserProfile) {
     };
     // cookies() is a dynamic function, ensure it's awaited if the context implies.
     // However, typical usage is synchronous for setting.
-    const cookieStore = cookies();
+    const cookieStore = await cookies();
     cookieStore.set('session', JSON.stringify(sessionData), {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
@@ -250,7 +250,7 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
 export async function logoutUser(): Promise<{ success: boolean }> {
     try {
         console.log('Server Action: Logging out user (Firebase and cookie)');
-        const cookieStore = cookies(); // Obtain cookie store
+        const cookieStore = await cookies(); // Obtain cookie store
         cookieStore.delete('session'); // Delete cookie
         // Note: Firebase signOut is client-side, so we don't call it here.
         // The client should handle Firebase sign-out if necessary.
@@ -293,7 +293,7 @@ export async function getUserSession(): Promise<UserProfile | null> {
     } catch (error) {
         console.error('Error parsing session cookie:', error);
         // Clear potentially corrupted cookie
-        const storeForDelete = cookies(); 
+        const storeForDelete = await cookies(); 
         storeForDelete.delete('session'); 
         return null;
     }

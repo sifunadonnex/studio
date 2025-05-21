@@ -1,3 +1,4 @@
+
 'use client';
 
 import Link from 'next/link';
@@ -11,7 +12,7 @@ import { loginUser, LoginInput, AuthResponse } from '@/actions/auth'; // Import 
 import { useToast } from '@/hooks/use-toast';
 
 export default function LoginPage() {
-  const router = useRouter();
+  const router = useRouter(); // Keep for other potential uses, though not for main redirect now
   const { toast } = useToast();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -33,9 +34,11 @@ export default function LoginPage() {
           title: 'Login Successful',
           description: result.message,
         });
-        // Redirect using Next.js router
-        router.push(result.redirectTo || '/dashboard');
-        router.refresh(); // Refresh server components to update session state
+        // Force a full page navigation to ensure cookie is sent with the new request
+        // and server-side components/middleware correctly pick up the session.
+        if (typeof window !== "undefined") {
+            window.location.assign(result.redirectTo || '/dashboard');
+        }
       } else {
         setError(result.message);
         toast({
@@ -43,6 +46,7 @@ export default function LoginPage() {
           description: result.message,
           variant: 'destructive',
         });
+        setLoading(false); // Ensure loading is false on failure
       }
     } catch (err) {
         console.error("Login page error:", err);
@@ -53,9 +57,9 @@ export default function LoginPage() {
           description: message,
           variant: 'destructive',
         });
-    } finally {
-         setLoading(false);
-    }
+        setLoading(false); // Ensure loading is false on catch
+    } 
+    // setLoading(false) will not be reached if window.location.assign happens, which is fine.
   };
 
 
