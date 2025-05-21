@@ -8,7 +8,7 @@ export interface UserInfo { // Exporting for use in other client components if n
     name: string;
     email: string;
     role: 'customer' | 'staff' | 'admin';
-    phone?: string; 
+    phone?: string;
 }
 
 interface SessionState {
@@ -19,7 +19,7 @@ interface SessionState {
 interface UseSessionReturn {
     session: SessionState | null;
     loading: boolean;
-    refreshSession: () => void; 
+    refreshSession: () => void;
 }
 
 /**
@@ -42,39 +42,38 @@ export function useSession(): UseSessionReturn {
                 const cookieValue = sessionCookie.split('=')[1];
                 if (cookieValue) {
                     const decodedValue = decodeURIComponent(cookieValue);
-                    // Structure of cookie set by updated auth actions:
-                    // { userId, name, email, role, phone, loggedInAt }
                     const parsedSession: Partial<UserInfo & { userId: string, loggedInAt: number }> = JSON.parse(decodedValue);
-                    // console.log("useSession: Parsed cookie data:", parsedSession);
 
                     if (parsedSession.userId && parsedSession.email && parsedSession.role && parsedSession.loggedInAt) {
                          const userInfo: UserInfo = {
-                            id: parsedSession.userId, // Map userId from cookie to id in UserInfo
+                            id: parsedSession.userId,
                             name: parsedSession.name || 'User',
                             email: parsedSession.email,
                             role: parsedSession.role as 'customer' | 'staff' | 'admin',
                             phone: parsedSession.phone || undefined,
                          };
-                        // console.log("useSession: Session valid, user:", userInfo);
                         setSession({ isLoggedIn: true, user: userInfo });
                     } else {
-                        console.warn('useSession: Session cookie found but malformed or missing required fields.');
+                        console.warn('useSession: Session cookie found but malformed or missing required fields. Reporting as logged out.');
                         setSession({ isLoggedIn: false, user: null });
-                        document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
+                        // DO NOT DELETE THE COOKIE FROM CLIENT-SIDE:
+                        // document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
                     }
                 } else {
-                     console.log("useSession: Session cookie found but has no value.");
+                     console.log("useSession: Session cookie found but has no value. Reporting as logged out.");
                      setSession({ isLoggedIn: false, user: null });
-                     document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
+                     // DO NOT DELETE THE COOKIE FROM CLIENT-SIDE:
+                     // document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
                 }
             } else {
                 // console.log("useSession: No session cookie found.");
                 setSession({ isLoggedIn: false, user: null });
             }
         } catch (error) {
-            console.error("useSession: Error parsing session cookie:", error);
+            console.error("useSession: Error parsing session cookie:", error, "Reporting as logged out.");
             setSession({ isLoggedIn: false, user: null });
-            document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
+            // DO NOT DELETE THE COOKIE FROM CLIENT-SIDE:
+            // document.cookie = 'session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;';
         } finally {
             setLoading(false);
             // console.log("useSession: Check finished, loading set to false.");
@@ -83,6 +82,7 @@ export function useSession(): UseSessionReturn {
 
     useEffect(() => {
         checkSession();
+        // Refresh session on window focus to catch changes from other tabs/logout
         window.addEventListener('focus', checkSession);
         return () => {
             window.removeEventListener('focus', checkSession);
