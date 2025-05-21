@@ -48,7 +48,6 @@ export interface AuthResponse {
   success: boolean;
   message: string;
   user?: UserProfile;
-  // redirectTo is no longer needed here if server-side redirect is used for success
 }
 
 // --- Helper to set session cookie ---
@@ -241,6 +240,7 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
         if (error.code === 'auth/invalid-email') {
              return { success: false, message: 'Invalid email format.' };
         }
+        // For security reasons, even on error (like user not found), present a generic success message.
         return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
     }
 }
@@ -253,6 +253,9 @@ export async function logoutUser(): Promise<{ success: boolean }> {
         console.log('Server Action: Logging out user (Firebase and cookie)');
         const cookieStore = await cookies(); 
         cookieStore.delete('session'); 
+        // No need to call firebaseSignOut(auth) here if we primarily rely on our own session cookie
+        // and Firebase auth state is managed client-side or not strictly necessary for this app's auth flow once logged out.
+        // If Firebase sessions were being managed on the server with Admin SDK, then server-side signout would be relevant.
         return { success: true };
     } catch (error) {
         console.error('Server Action Error (logoutUser):', error);
@@ -264,30 +267,39 @@ export async function logoutUser(): Promise<{ success: boolean }> {
  * Retrieves the current user session from the cookie.
  */
 export async function getUserSession(): Promise<UserProfile | null> {
+    console.log('[getUserSession] Attempting to get session cookie...');
     const cookieStore = await cookies(); 
     const sessionCookie = cookieStore.get('session');
     
     if (!sessionCookie) {
+        console.log('[getUserSession] No session cookie found.');
         return null;
     }
 
+    console.log('[getUserSession] Session cookie found. Value:', sessionCookie.value);
+
     try {
         const sessionData = JSON.parse(sessionCookie.value);
-        if (sessionData && sessionData.userId && sessionData.email && sessionData.role) {
+        console.log('[getUserSession] Parsed session data:', sessionData);
+
+        if (sessionData && sessionData.userId && sessionData.email && sessionData.role && sessionData.loggedInAt) {
             const userProfile: UserProfile = { 
                 id: sessionData.userId, 
-                name: sessionData.name, 
+                name: sessionData.name || 'User', // Provide a fallback for name
                 email: sessionData.email, 
                 role: sessionData.role,
-                phone: sessionData.phone,
+                phone: sessionData.phone || undefined, // Ensure phone is optional
             };
+            console.log('[getUserSession] Session valid. Returning user profile:', userProfile);
             return userProfile;
         }
+        console.warn('[getUserSession] Parsed session data is malformed or missing required fields.');
+        // Do not delete cookie here; let middleware handle redirection if session is deemed invalid.
         return null;
     } catch (error) {
-        console.error('Error parsing session cookie:', error);
-        const storeForDelete = await cookies(); 
-        storeForDelete.delete('session'); 
+        console.error('[getUserSession] Error parsing session cookie:', error);
+        // Do not delete cookie here.
         return null;
     }
 }
+
