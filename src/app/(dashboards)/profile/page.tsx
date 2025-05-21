@@ -6,10 +6,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea"; // Added Textarea
+import { Textarea } from "@/components/ui/textarea";
 import { User, Mail, Phone, Car, Lock, PlusCircle, Edit3, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useSession } from '@/hooks/use-session'; 
+import { useUserSession } from '@/contexts/session-context'; // Import the new context hook
 import { Skeleton } from '@/components/ui/skeleton';
 import { 
     updateProfileAction, 
@@ -19,10 +19,10 @@ import {
     UpdateProfileInput,
     ChangePasswordInput,
     VehicleInput,
-    ProfileResponse, // Updated to potentially include UserProfile
+    ProfileResponse,
     VehicleResponse
 } from '@/actions/profile'; 
-import Link from 'next/link'; // For login redirect link
+import Link from 'next/link';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -41,17 +41,16 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  // DialogTrigger, // Not used directly, dialog opened programmatically
   DialogClose,
-} from "@/components/ui/dialog"
+} from "@/components/ui/dialog";
+import { useRouter } from 'next/navigation';
 
 
 export default function ProfilePage() {
     const { toast } = useToast();
-    const { session, loading: sessionLoading, refreshSession } = useSession();
+    const { userProfile } = useUserSession(); // Use new context hook
+    const router = useRouter();
     
-    const [vehicles, setVehicles] = useState<VehicleInput[]>([]); 
-
     const [name, setName] = useState('');
     const [phone, setPhone] = useState('');
     const [email, setEmail] = useState(''); 
@@ -60,37 +59,22 @@ export default function ProfilePage() {
     const [newPassword, setNewPassword] = useState('');
     const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
+    const [vehicles, setVehicles] = useState<VehicleInput[]>([]); 
     const [loadingProfile, setLoadingProfile] = useState(false);
     const [loadingPassword, setLoadingPassword] = useState(false);
-    const [loadingVehicles, setLoadingVehicles] = useState(true); // Default true to show skeleton initially
-    const [vehicleActionLoading, setVehicleActionLoading] = useState(false); // Specific for dialog submission
+    const [loadingVehicles, setLoadingVehicles] = useState(true);
+    const [vehicleActionLoading, setVehicleActionLoading] = useState(false);
     const [profileError, setProfileError] = useState('');
     const [passwordError, setPasswordError] = useState('');
 
-    // State for Add/Edit Vehicle Dialog
     const [isVehicleDialogOpen, setIsVehicleDialogOpen] = useState(false);
     const [editingVehicle, setEditingVehicle] = useState<VehicleInput | null>(null);
-    // Ensure all fields of VehicleInput (excluding id for new) are here.
     const [vehicleForm, setVehicleForm] = useState<Omit<VehicleInput, 'id' | 'serviceHistory'> & { serviceHistory?: string }>({ 
         make: '', model: '', year: '', nickname: '', serviceHistory: '' 
     });
 
-
-    // Fetch vehicles and populate form fields when session data loads or changes
-    useEffect(() => {
-        if (session?.isLoggedIn && session.user) {
-            setName(session.user.name || '');
-            setEmail(session.user.email || '');
-            setPhone(session.user.phone || '');
-            if(vehicles.length === 0) fetchUserVehicles(); // Fetch only if not already fetched
-        } else if (!sessionLoading && !session?.isLoggedIn) {
-            setLoadingVehicles(false);
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [session, sessionLoading]); // Removed vehicles from deps to avoid re-fetch on vehicle list change
-
     const fetchUserVehicles = useCallback(async () => {
-        if (!session?.isLoggedIn) {
+        if (!userProfile) { // Check userProfile from context
             setLoadingVehicles(false);
             return;
         }
@@ -107,23 +91,42 @@ export default function ProfilePage() {
         } finally {
             setLoadingVehicles(false);
         }
-    }, [session?.isLoggedIn, toast]);
+    }, [userProfile, toast]);
 
+    useEffect(() => {
+        if (userProfile) {
+            setName(userProfile.name || '');
+            setEmail(userProfile.email || '');
+            setPhone(userProfile.phone || '');
+            if(vehicles.length === 0) fetchUserVehicles();
+        } else {
+             // This case should ideally be handled by the layout redirecting unauthenticated users.
+             // If userProfile is null here, it means context might not be ready or an auth issue.
+             console.warn("ProfilePage: userProfile is null in useEffect. This might indicate an issue if not initial load.");
+             setLoadingVehicles(false); 
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [userProfile]); // Removed fetchUserVehicles from deps, it's called conditionally
 
     const handleUpdateProfile = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!session?.isLoggedIn || !session.user) return;
+        if (!userProfile) {
+            toast({ title: "Authentication Error", description: "User session not found.", variant: "destructive" });
+            return;
+        }
 
         setLoadingProfile(true);
         setProfileError('');
-        
         const profileData: UpdateProfileInput = { name, phone: phone || undefined };
 
         try {
             const result: ProfileResponse = await updateProfileAction(profileData);
             if (result.success) {
                 toast({ title: "Profile Updated", description: result.message });
-                refreshSession(); // Key: Re-fetch session data which reads the updated cookie
+                // The session cookie is updated server-side.
+                // To reflect changes in the client-side context, we need to refresh the page or re-fetch session.
+                // router.refresh() re-runs Server Components for the current route, including layouts.
+                router.refresh(); 
             } else {
                 setProfileError(result.message || "Failed to update profile.");
                 toast({ title: "Update Failed", description: result.message, variant: "destructive" });
@@ -139,7 +142,7 @@ export default function ProfilePage() {
 
     const handleChangePassword = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!session?.isLoggedIn || !session.user) return;
+        if (!userProfile) return;
 
         setPasswordError('');
         if (newPassword !== confirmNewPassword) {
@@ -187,13 +190,13 @@ export default function ProfilePage() {
 
     const handleSaveVehicle = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!session?.isLoggedIn) return;
+        if (!userProfile) return;
 
         const action = editingVehicle ? 'update' : 'add';
         const vehicleData: VehicleInput = {
             ...vehicleForm,
             id: editingVehicle?.id, 
-            serviceHistory: vehicleForm.serviceHistory || undefined, // Ensure it's optional or string
+            serviceHistory: vehicleForm.serviceHistory || undefined,
         };
         
         setVehicleActionLoading(true); 
@@ -201,7 +204,7 @@ export default function ProfilePage() {
             const result: VehicleResponse = await manageVehicleAction({ action, vehicle: vehicleData });
             if (result.success) {
                 toast({ title: `Vehicle ${action === 'add' ? 'Added' : 'Updated'}`, description: result.message });
-                if(result.vehicles) setVehicles(result.vehicles); // Refresh vehicle list from response
+                if(result.vehicles) setVehicles(result.vehicles);
                 setIsVehicleDialogOpen(false);
             } else {
                 toast({ title: "Vehicle Operation Failed", description: result.message, variant: "destructive" });
@@ -214,17 +217,16 @@ export default function ProfilePage() {
     };
 
     const handleDeleteVehicle = async (vehicleId: string) => {
-        if (!session?.isLoggedIn || !vehicleId) return; // Added !vehicleId check
-        setVehicleActionLoading(true); // Use specific loading state for vehicle actions
+        if (!userProfile || !vehicleId) return;
+        setVehicleActionLoading(true);
         try {
-            // Pass minimal required VehicleInput for delete action
             const result: VehicleResponse = await manageVehicleAction({ 
                 action: 'delete', 
                 vehicle: { id: vehicleId, make: '', model: '', year: '', nickname: '' }
             });
             if (result.success) {
                 toast({ title: "Vehicle Deleted", description: result.message });
-                 if(result.vehicles) setVehicles(result.vehicles); // Refresh vehicle list from response
+                 if(result.vehicles) setVehicles(result.vehicles);
             } else {
                 toast({ title: "Deletion Failed", description: result.message, variant: "destructive" });
             }
@@ -235,26 +237,27 @@ export default function ProfilePage() {
         }
     };
 
-
-    if (sessionLoading) {
+    // Show loading skeletons if userProfile from context isn't available yet OR vehicles are loading
+    if (!userProfile || (loadingVehicles && vehicles.length === 0)) {
         return (
              <div className="space-y-8 p-4 md:p-6 lg:p-8">
                 <Skeleton className="h-8 w-48 mb-8" />
                  <Card><CardHeader><Skeleton className="h-6 w-40" /></CardHeader><CardContent className="space-y-4"><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /></CardContent><CardFooter><Skeleton className="h-10 w-24" /></CardFooter></Card>
                  <Card><CardHeader><Skeleton className="h-6 w-40" /></CardHeader><CardContent className="space-y-4"><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /></CardContent><CardFooter><Skeleton className="h-10 w-32" /></CardFooter></Card>
-                 <Card><CardHeader><Skeleton className="h-6 w-40" /></CardHeader><CardContent><Skeleton className="h-16 w-full" /></CardContent></Card>
+                 <Card><CardHeader><Skeleton className="h-6 w-40" /></CardHeader><CardContent><Skeleton className="h-16 w-full" /></CardContent><CardFooter><Button disabled><PlusCircle className="mr-2 h-4 w-4" />Add Vehicle</Button></CardFooter></Card>
              </div>
         );
     }
-
-     if (!session?.isLoggedIn) {
+    // If userProfile is definitively null after context has loaded (should be caught by layout, but as a fallback)
+     if (!userProfile) {
          return (
              <div className="p-8 text-center">
-                 <p>Please log in to view your profile.</p>
+                 <p>Session not available. Please try logging in again.</p>
                  <Link href="/login" passHref><Button variant="link">Login</Button></Link>
              </div>
          );
      }
+
 
   return (
     <div className="space-y-8">
@@ -301,7 +304,7 @@ export default function ProfilePage() {
                 <ul className="space-y-3">
                     {vehicles.map(v => (
                          <li key={v.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center border p-3 rounded-md gap-2">
-                             <div><p className="font-medium">{v.nickname} ({v.make} {v.model}, {v.year})</p><p className="text-xs text-muted-foreground">ID: {v.id}</p></div>
+                             <div><p className="font-medium">{v.nickname} ({v.make} {v.model}, {v.year})</p>{v.id && <p className="text-xs text-muted-foreground">ID: {v.id}</p>}</div>
                              <div className="space-x-2 shrink-0 mt-2 sm:mt-0">
                                 <Button variant="ghost" size="sm" onClick={() => openVehicleDialog(v)} disabled={vehicleActionLoading}><Edit3 className="mr-1 h-4 w-4"/>Edit</Button>
                                 <AlertDialog>
@@ -360,4 +363,3 @@ export default function ProfilePage() {
     </div>
   );
 }
-

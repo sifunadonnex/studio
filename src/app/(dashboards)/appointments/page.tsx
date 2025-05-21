@@ -10,21 +10,21 @@ import { CalendarPlus, RefreshCcw, XCircle, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { useSession } from '@/hooks/use-session';
+import { useUserSession } from '@/contexts/session-context'; // Import the new context hook
 import { db } from '@/lib/firebase/config';
 import { collection, query, where, getDocs, orderBy, doc, updateDoc, Timestamp } from 'firebase/firestore';
 import { format } from 'date-fns';
 
 interface Appointment {
-  id: string; // Firestore document ID
+  id: string; 
   serviceId: string;
   serviceName: string;
-  date: string; // YYYY-MM-DD from Firestore, or can be Timestamp if not pre-formatted
+  date: string; 
   time: string;
   vehicleMake: string;
   vehicleModel?: string | null;
   status: AppointmentStatus;
-  createdAt: Timestamp; // Firestore Timestamp
+  createdAt: Timestamp; 
   customerName?: string; 
   customerEmail?: string;
 }
@@ -34,16 +34,14 @@ type AppointmentStatus = 'Confirmed' | 'Pending' | 'Completed' | 'Cancelled';
 
 export default function MyAppointmentsPage() {
     const { toast } = useToast();
-    const { session, loading: sessionLoading } = useSession();
+    const { userProfile } = useUserSession(); // Use new context hook
     const [appointments, setAppointments] = useState<Appointment[]>([]);
     const [loadingAppointments, setLoadingAppointments] = useState(true);
     const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
 
-
     const fetchAppointments = useCallback(async () => {
-        // Guard against fetching if session is not ready or user not logged in
-        if (!session?.isLoggedIn || !session.user?.id) {
-            setAppointments([]); // Clear appointments if user is not logged in or ID is missing
+        if (!userProfile?.id) {
+            setAppointments([]); 
             setLoadingAppointments(false);
             return;
         }
@@ -52,7 +50,7 @@ export default function MyAppointmentsPage() {
         try {
             const q = query(
                 collection(db, "appointments"), 
-                where("userId", "==", session.user.id), // Use session.user.id which is the Firebase UID
+                where("userId", "==", userProfile.id), 
                 orderBy("createdAt", "desc")
             );
             const querySnapshot = await getDocs(q);
@@ -61,9 +59,6 @@ export default function MyAppointmentsPage() {
                  return {
                      id: doc.id,
                      ...data,
-                     // Ensure date is correctly handled if it might be a Timestamp from Firestore
-                     // For this app, 'date' is stored as a string 'YYYY-MM-DD'
-                     // 'createdAt' is a Timestamp
                      createdAt: data.createdAt as Timestamp, 
                  } as Appointment;
             });
@@ -71,29 +66,23 @@ export default function MyAppointmentsPage() {
         } catch (error) {
             console.error("Error fetching appointments:", error);
             toast({ title: "Error", description: "Could not fetch appointments.", variant: "destructive" });
-            setAppointments([]); // Clear appointments on error
+            setAppointments([]);
         } finally {
             setLoadingAppointments(false);
         }
-    }, [session, toast]); // Depends on session object (which includes user.id)
+    }, [userProfile, toast]);
 
     useEffect(() => {
-        if (sessionLoading) {
-            // Session is still loading, keep appointments loading state true or as is.
-            // Initial state of loadingAppointments is true, so this prevents premature fetching.
-            return; 
-        }
-
-        // Session is loaded (sessionLoading is false)
-        if (session?.isLoggedIn && session.user?.id) {
-            // User is logged in and user ID is available
+        if (userProfile) { // Session context has provided the user profile
             fetchAppointments();
         } else {
-            // User is not logged in, or session.user.id is not available
-            setAppointments([]); // Clear any existing appointments
-            setLoadingAppointments(false); // Ensure loading indicator is turned off
+            // userProfile is null, which means context might still be loading or no session
+            // If layout redirects, this state might not be hit often for unauthenticated.
+            // But good to handle if context is loading.
+            setAppointments([]);
+            setLoadingAppointments(false); // Or true if we want to show a generic loading spinner until context resolves
         }
-    }, [sessionLoading, session, fetchAppointments]);
+    }, [userProfile, fetchAppointments]);
 
 
     const handleReschedule = (id: string) => {
@@ -110,7 +99,6 @@ export default function MyAppointmentsPage() {
                 status: "Cancelled" as AppointmentStatus,
                 updatedAt: Timestamp.now(),
             });
-            // Refresh appointments list to reflect the change
             fetchAppointments(); 
             toast({ title: "Appointment Cancelled", description: `Appointment ${id.substring(0,8)}... has been cancelled.` });
         } catch (error) {
@@ -132,16 +120,34 @@ export default function MyAppointmentsPage() {
     };
 
     const formatDateDisplay = (dateInput: string | Timestamp) => {
-        if (typeof dateInput === 'string') { // Expects 'YYYY-MM-DD'
+        if (typeof dateInput === 'string') {
              try {
-                return format(new Date(dateInput), 'PPP'); // Format to 'MMM d, yyyy' for better readability
+                return format(new Date(dateInput), 'PPP');
              } catch (e) {
-                return dateInput; // Fallback to original string if parsing fails
+                return dateInput; 
              }
         }
         if (dateInput instanceof Timestamp) return format(dateInput.toDate(), 'PPP');
         return 'N/A';
     };
+
+    // Initial loading state while userProfile (from context) might be loading
+    if (!userProfile && loadingAppointments) { // Check loadingAppointments as well
+        return (
+            <div className="flex justify-center items-center h-32">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <p className="ml-2 text-muted-foreground">Loading session...</p>
+            </div>
+        );
+    }
+    // If userProfile is definitively null after context has loaded (should be caught by layout)
+     if (!userProfile) {
+         return (
+             <p className="text-center text-muted-foreground py-8">
+                 Please <Link href="/login" className="text-primary hover:underline">log in</Link> to see your appointments.
+             </p>
+         );
+     }
 
 
   return (
@@ -161,18 +167,12 @@ export default function MyAppointmentsPage() {
            <CardDescription>View your past, present, and future appointments.</CardDescription>
         </CardHeader>
         <CardContent>
-           {sessionLoading || loadingAppointments ? (
+           {loadingAppointments ? ( // This loading is specific to fetching appointments data
                 <div className="flex justify-center items-center h-32">
                     <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                    <p className="ml-2 text-muted-foreground">
-                        {sessionLoading ? "Loading session..." : "Fetching appointments..."}
-                    </p>
+                    <p className="ml-2 text-muted-foreground">Fetching appointments...</p>
                 </div>
-           ) : !session?.isLoggedIn ? (
-                <p className="text-center text-muted-foreground py-8">
-                    Please <Link href="/login" className="text-primary hover:underline">log in</Link> to see your appointments.
-                </p>
-           ): (
+           ) : (
              <Table>
                <TableHeader>
                   <TableRow>
@@ -249,4 +249,3 @@ export default function MyAppointmentsPage() {
     </div>
   );
 }
-
