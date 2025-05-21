@@ -1,7 +1,9 @@
+
 'use server';
 
 import { z } from 'zod';
 import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation'; // Import redirect
 import { auth, db } from '@/lib/firebase/config'; // Firebase auth and db instances
 import { 
   signInWithEmailAndPassword, 
@@ -38,20 +40,18 @@ export interface UserProfile {
     email: string;
     role: 'customer' | 'staff' | 'admin';
     phone?: string;
-    createdAt?: string; // Changed from any/Timestamp to string
-    updatedAt?: string; // Changed from any/Timestamp to string
+    createdAt?: string;
+    updatedAt?: string;
 }
 
 export interface AuthResponse {
   success: boolean;
   message: string;
   user?: UserProfile;
-  redirectTo?: string;
+  // redirectTo is no longer needed here if server-side redirect is used for success
 }
 
 // --- Helper to set session cookie ---
-// UserProfile passed here should have string dates if they are part of it.
-// Currently, cookie only stores id, name, email, role, phone.
 export async function setSessionCookie(userData: UserProfile) {
     const sessionData = {
         userId: userData.id, 
@@ -61,8 +61,6 @@ export async function setSessionCookie(userData: UserProfile) {
         phone: userData.phone,
         loggedInAt: Date.now(),
     };
-    // cookies() is a dynamic function, ensure it's awaited if the context implies.
-    // However, typical usage is synchronous for setting.
     const cookieStore = await cookies();
     cookieStore.set('session', JSON.stringify(sessionData), {
         httpOnly: true,
@@ -78,7 +76,8 @@ export async function setSessionCookie(userData: UserProfile) {
 
 /**
  * Logs in a user using Firebase Authentication.
- * On success, fetches user profile from Firestore and sets a session cookie.
+ * On success, fetches user profile, sets session cookie, and redirects.
+ * Returns AuthResponse only on failure.
  */
 export async function loginUser(data: LoginInput): Promise<AuthResponse> {
   try {
@@ -106,12 +105,10 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
 
             await setSessionCookie(userProfile); 
             console.log('Server Action: Firebase Login successful, session set for:', userProfile.email);
-            return {
-                success: true,
-                message: 'Login successful!',
-                user: userProfile,
-                redirectTo: userProfile.role === 'admin' ? '/admin/reports' : '/dashboard',
-            };
+            
+            const redirectToPath = userProfile.role === 'admin' ? '/admin/reports' : '/dashboard';
+            redirect(redirectToPath); // Perform server-side redirect
+
         } else {
             console.error('Server Action: Firestore profile not found for user:', firebaseUser.uid);
             await firebaseSignOut(auth); 
@@ -124,6 +121,10 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
     if (error instanceof z.ZodError) {
       const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
       return { success: false, message: `Validation failed: ${messages}` };
+    }
+    // Check if error is due to redirect()
+    if (error.message === 'NEXT_REDIRECT' || (typeof error.digest === 'string' && error.digest.startsWith('NEXT_REDIRECT'))) {
+      throw error; // Re-throw to let Next.js handle the redirect
     }
     console.error('Server Action Error (loginUser Firebase):', error);
     let message = 'An unexpected error occurred during login.';
@@ -147,7 +148,8 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
 
 /**
  * Registers a new user using Firebase Authentication and creates a user profile in Firestore.
- * On success, sets a session cookie.
+ * On success, sets a session cookie and redirects.
+ * Returns AuthResponse only on failure.
  */
 export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
     try {
@@ -159,7 +161,6 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
 
         if (firebaseUser) {
             const now = new Date();
-            // Data for Firestore document (uses serverTimestamp)
             const firestoreDocumentData = {
                 name: validatedData.name,
                 email: firebaseUser.email!,
@@ -182,12 +183,9 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
 
             await setSessionCookie(userProfileForSession);
             console.log('Server Action: Firebase Registration successful, session set for:', userProfileForSession.email);
-            return {
-                 success: true,
-                 message: 'Registration successful! Welcome!',
-                 user: userProfileForSession, 
-                 redirectTo: '/dashboard',
-            };
+            
+            redirect('/dashboard'); // Perform server-side redirect
+
         } else {
              return { success: false, message: 'Firebase registration failed unexpectedly.' };
         }
@@ -195,6 +193,10 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
          if (error instanceof z.ZodError) {
             const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
             return { success: false, message: `Validation failed: ${messages}` };
+        }
+        // Check if error is due to redirect()
+        if (error.message === 'NEXT_REDIRECT' || (typeof error.digest === 'string' && error.digest.startsWith('NEXT_REDIRECT'))) {
+            throw error; // Re-throw to let Next.js handle the redirect
         }
         console.error('Server Action Error (registerUser Firebase):', error);
         let message = 'An unexpected error occurred during registration.';
@@ -239,7 +241,6 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
         if (error.code === 'auth/invalid-email') {
              return { success: false, message: 'Invalid email format.' };
         }
-        // For security reasons, typically return a generic success message even if email doesn't exist
         return { success: true, message: 'If an account exists for this email, a password reset link has been sent.' };
     }
 }
@@ -250,11 +251,8 @@ export async function sendPasswordResetLink(data: ForgotPasswordInput): Promise<
 export async function logoutUser(): Promise<{ success: boolean }> {
     try {
         console.log('Server Action: Logging out user (Firebase and cookie)');
-        const cookieStore = await cookies(); // Obtain cookie store
-        cookieStore.delete('session'); // Delete cookie
-        // Note: Firebase signOut is client-side, so we don't call it here.
-        // The client should handle Firebase sign-out if necessary.
-        // This server action only clears the session cookie.
+        const cookieStore = await cookies(); 
+        cookieStore.delete('session'); 
         return { success: true };
     } catch (error) {
         console.error('Server Action Error (logoutUser):', error);
@@ -264,8 +262,6 @@ export async function logoutUser(): Promise<{ success: boolean }> {
 
 /**
  * Retrieves the current user session from the cookie.
- * This data is derived from Firebase user info after login/registration.
- * createdAt and updatedAt are not stored in the cookie, so they will be undefined here.
  */
 export async function getUserSession(): Promise<UserProfile | null> {
     const cookieStore = await cookies(); 
@@ -278,21 +274,18 @@ export async function getUserSession(): Promise<UserProfile | null> {
     try {
         const sessionData = JSON.parse(sessionCookie.value);
         if (sessionData && sessionData.userId && sessionData.email && sessionData.role) {
-            // Construct UserProfile without trying to parse dates that aren't there.
             const userProfile: UserProfile = { 
                 id: sessionData.userId, 
                 name: sessionData.name, 
                 email: sessionData.email, 
                 role: sessionData.role,
                 phone: sessionData.phone,
-                // createdAt & updatedAt are not in the cookie, so they remain undefined.
             };
             return userProfile;
         }
         return null;
     } catch (error) {
         console.error('Error parsing session cookie:', error);
-        // Clear potentially corrupted cookie
         const storeForDelete = await cookies(); 
         storeForDelete.delete('session'); 
         return null;

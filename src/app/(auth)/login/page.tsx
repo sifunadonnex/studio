@@ -2,17 +2,16 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+// useRouter no longer needed for main redirect
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useState } from 'react';
-import { loginUser, LoginInput, AuthResponse } from '@/actions/auth'; // Import server action
+import { loginUser, LoginInput, AuthResponse } from '@/actions/auth';
 import { useToast } from '@/hooks/use-toast';
 
 export default function LoginPage() {
-  const router = useRouter(); // Keep for other potential uses, though not for main redirect now
   const { toast } = useToast();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -27,28 +26,32 @@ export default function LoginPage() {
     const loginData: LoginInput = { email, password };
 
     try {
-      const result: AuthResponse = await loginUser(loginData); // Call server action
+      // loginUser will now either redirect server-side on success,
+      // or return an AuthResponse on failure.
+      const result: AuthResponse | void = await loginUser(loginData);
 
-      if (result.success) {
-        toast({
-          title: 'Login Successful',
-          description: result.message,
-        });
-        // Force a full page navigation to ensure cookie is sent with the new request
-        // and server-side components/middleware correctly pick up the session.
-        if (typeof window !== "undefined") {
-            window.location.assign(result.redirectTo || '/dashboard');
-        }
-      } else {
+      // If result is returned, it means login failed (server did not redirect)
+      if (result && !result.success) {
         setError(result.message);
         toast({
           title: 'Login Failed',
           description: result.message,
           variant: 'destructive',
         });
-        setLoading(false); // Ensure loading is false on failure
       }
-    } catch (err) {
+      // On successful login, server action redirects, so no client-side redirect needed.
+      // Success toast is removed as page will navigate away.
+      
+    } catch (err: any) {
+        // If the error is NEXT_REDIRECT, it's handled by Next.js and browser redirects.
+        // We don't need to do anything specific for it here.
+        if (err.message === 'NEXT_REDIRECT' || (typeof err.digest === 'string' && err.digest.startsWith('NEXT_REDIRECT'))) {
+          // This error is expected when redirect() is called from server action.
+          // The browser will handle the redirect. Let loading state persist until navigation.
+          return; 
+        }
+
+        // Handle other errors
         console.error("Login page error:", err);
         const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
         setError(message);
@@ -57,9 +60,12 @@ export default function LoginPage() {
           description: message,
           variant: 'destructive',
         });
-        setLoading(false); // Ensure loading is false on catch
-    } 
-    // setLoading(false) will not be reached if window.location.assign happens, which is fine.
+    } finally {
+      // Set loading to false only if not redirected.
+      // If a redirect is in progress, this might not be reached or might flash.
+      // It's generally safe to set it, as a redirect will unload the page.
+      setLoading(false); 
+    }
   };
 
 

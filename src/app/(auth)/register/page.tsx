@@ -1,18 +1,18 @@
+
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+// useRouter no longer needed for main redirect
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useState } from 'react';
-import { registerUser, RegisterInput, AuthResponse } from '@/actions/auth'; // Import server action
+import { registerUser, RegisterInput, AuthResponse } from '@/actions/auth';
 import { useToast } from '@/hooks/use-toast';
 
 
 export default function RegisterPage() {
-    const router = useRouter();
     const { toast } = useToast();
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
@@ -40,17 +40,12 @@ export default function RegisterPage() {
         const registerData: RegisterInput = { name, email, password };
 
         try {
-            const result: AuthResponse = await registerUser(registerData); // Call server action
+            // registerUser will now either redirect server-side on success,
+            // or return an AuthResponse on failure.
+            const result: AuthResponse | void = await registerUser(registerData);
 
-            if (result.success) {
-                 toast({
-                    title: "Registration Successful!",
-                    description: result.message,
-                 });
-                 // Redirect using Next.js router
-                 router.push(result.redirectTo || '/dashboard');
-                 router.refresh(); // Refresh server components
-            } else {
+            // If result is returned, it means registration failed (server did not redirect)
+            if (result && !result.success) {
                 setError(result.message);
                 toast({
                     title: "Registration Failed",
@@ -58,8 +53,17 @@ export default function RegisterPage() {
                     variant: "destructive",
                 });
             }
+            // On successful registration, server action redirects.
+            // Success toast is removed as page will navigate away.
 
-        } catch (err) {
+        } catch (err: any) {
+            // If the error is NEXT_REDIRECT, it's handled by Next.js and browser redirects.
+            if (err.message === 'NEXT_REDIRECT' || (typeof err.digest === 'string' && err.digest.startsWith('NEXT_REDIRECT'))) {
+                // This error is expected. Let loading state persist until navigation.
+                return;
+            }
+
+            // Handle other errors
              console.error("Registration page error:", err);
              const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
              setError(message);
@@ -69,6 +73,7 @@ export default function RegisterPage() {
                 variant: "destructive",
              });
         } finally {
+            // Set loading to false only if not redirected.
             setLoading(false);
         }
     };
@@ -130,7 +135,7 @@ export default function RegisterPage() {
                 placeholder="••••••••"
                 required
                 value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
+                onChange={(e) => setConfirmNewPassword(e.target.value)}
                 disabled={loading}
                 autoComplete="new-password"
               />
