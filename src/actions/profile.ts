@@ -26,7 +26,9 @@ const VehicleSchema = z.object({
     nickname: z.string().min(1, { message: 'Nickname is required.'}),
     serviceHistory: z.string().optional().describe(
       'A string containing the service history of the vehicle, including dates and services performed.'
-    ), 
+    ),
+    createdAt: z.string().optional(), // Serialized Timestamp
+    updatedAt: z.string().optional(), // Serialized Timestamp
 });
 
 // --- Types ---
@@ -42,6 +44,19 @@ export interface ProfileResponse {
 export interface VehicleResponse extends ProfileResponse {
     vehicles?: VehicleInput[];
 }
+
+// --- Helper Function to serialize Vehicle Timestamps ---
+const serializeVehicleTimestamps = (vehicleData: any): VehicleInput => {
+    const serializedData = { ...vehicleData };
+    if (vehicleData.createdAt instanceof Timestamp) {
+        serializedData.createdAt = vehicleData.createdAt.toDate().toISOString();
+    }
+    if (vehicleData.updatedAt instanceof Timestamp) {
+        serializedData.updatedAt = vehicleData.updatedAt.toDate().toISOString();
+    }
+    return serializedData as VehicleInput;
+};
+
 
 // --- Server Actions ---
 
@@ -130,7 +145,7 @@ export async function changePasswordAction(data: ChangePasswordInput): Promise<P
 
 interface ManageVehicleInput {
     action: 'add' | 'update' | 'delete';
-    vehicle: VehicleInput;
+    vehicle: VehicleInput; // Expects potentially non-serialized createdAt/updatedAt on input for 'add' if we were to set them on client
 }
 
 /**
@@ -147,22 +162,32 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
     console.log(`Server Action (manageVehicle Firestore): Action=${input.action} for user ${userId}`, input.vehicle);
 
     try {
-        const validatedVehicle = VehicleSchema.parse(input.vehicle);
-        const vehiclesCollectionRef = collection(db, 'users', userId, 'vehicles');
+        // Validate only the core fields, createdAt/updatedAt are handled by server or serialization
+        const coreVehicleSchema = VehicleSchema.omit({ createdAt: true, updatedAt: true });
+        const validatedVehicleData = coreVehicleSchema.parse(input.vehicle);
 
-        let vehicleId = validatedVehicle.id;
+        const vehiclesCollectionRef = collection(db, 'users', userId, 'vehicles');
+        let vehicleId = input.vehicle.id; // Use ID from input vehicle directly for update/delete
 
         if (input.action === 'add') {
             const newVehicleDocRef = doc(vehiclesCollectionRef); 
             vehicleId = newVehicleDocRef.id;
-            // Note: VehicleSchema doesn't include createdAt/updatedAt, so they are not in validatedVehicle.
-            // Firestore will store them as Timestamps.
-            await setDoc(newVehicleDocRef, { ...validatedVehicle, id: vehicleId, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+            await setDoc(newVehicleDocRef, { 
+                ...validatedVehicleData, 
+                id: vehicleId, // Ensure ID is part of the document
+                createdAt: serverTimestamp(), 
+                updatedAt: serverTimestamp() 
+            });
             console.log(`Firestore: Added vehicle ${vehicleId} for user ${userId}`);
         } else if (input.action === 'update') {
             if (!vehicleId) return { success: false, message: "Vehicle ID is required for update." };
             const vehicleDocRef = doc(vehiclesCollectionRef, vehicleId);
-            await updateDoc(vehicleDocRef, { ...validatedVehicle, updatedAt: serverTimestamp() });
+            // Do not spread input.vehicle directly if it contains stringified dates.
+            // Spread validatedVehicleData which is clean.
+            await updateDoc(vehicleDocRef, { 
+                ...validatedVehicleData, 
+                updatedAt: serverTimestamp() 
+            });
             console.log(`Firestore: Updated vehicle ${vehicleId} for user ${userId}`);
         } else if (input.action === 'delete') {
             if (!vehicleId) return { success: false, message: "Vehicle ID is required for delete." };
@@ -173,12 +198,10 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
             return { success: false, message: "Invalid vehicle action specified." };
         }
 
-        const updatedVehiclesSnap = await getDocs(vehiclesCollectionRef);
-        // VehicleInput from Zod schema doesn't have createdAt/updatedAt.
-        // If doc.data() contains Timestamps for these, they will be stripped by `as VehicleInput`
-        // or if VehicleInput was `any`, they would pass as Timestamps causing issues if passed to client.
-        // For now, assuming Zod strictness handles this for VehicleInput.
-        const updatedVehicles = updatedVehiclesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as VehicleInput));
+        const updatedVehiclesSnap = await getDocs(query(vehiclesCollectionRef, orderBy("createdAt", "desc")));
+        const updatedVehicles = updatedVehiclesSnap.docs.map(docSnap => 
+            serializeVehicleTimestamps({ id: docSnap.id, ...docSnap.data() })
+        );
 
         return {
             success: true,
@@ -209,9 +232,11 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
 
      try {
          const vehiclesCollectionRef = collection(db, 'users', userId, 'vehicles');
-         const vehiclesSnap = await getDocs(vehiclesCollectionRef);
-         // As above, assuming VehicleInput is strict and doesn't pass through Timestamps.
-         const vehicles = vehiclesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as VehicleInput));
+         const vehiclesSnap = await getDocs(query(vehiclesCollectionRef, orderBy("createdAt", "desc")));
+         
+         const vehicles = vehiclesSnap.docs.map(docSnap => 
+            serializeVehicleTimestamps({ id: docSnap.id, ...docSnap.data() })
+         );
 
          return { success: true, message: "Vehicles fetched successfully.", vehicles };
 
@@ -231,23 +256,28 @@ export async function fetchUserProfile(userId: string): Promise<UserProfile | nu
         const userDocSnap = await getDoc(userDocRef);
         if (userDocSnap.exists()) {
             const data = userDocSnap.data();
-            // Serialize Timestamps to ISO strings
-            const createdAt = data.createdAt instanceof Timestamp ? data.createdAt.toDate().toISOString() : undefined;
-            const updatedAt = data.updatedAt instanceof Timestamp ? data.updatedAt.toDate().toISOString() : undefined;
-
-            return { 
+            
+            const userProfile: UserProfile = {
                 id: userDocSnap.id, 
                 name: data.name,
                 email: data.email,
                 role: data.role,
-                phone: data.phone,
-                createdAt,
-                updatedAt,
-            } as UserProfile;
+                phone: data.phone || null, // Ensure phone is null if not present
+                createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate().toISOString() : (data.createdAt || undefined),
+                updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toDate().toISOString() : (data.updatedAt || undefined),
+            };
+             if (!userProfile.role) {
+                console.warn(`[fetchUserProfile] User ${userId} is missing a role in Firestore.`);
+            }
+            return userProfile;
         }
+        console.warn(`[fetchUserProfile] User document not found for ID: ${userId}`);
         return null;
     } catch (error) {
-        console.error("Error fetching user profile from Firestore:", error);
+        console.error("[fetchUserProfile] Error fetching user profile from Firestore:", error);
         return null;
     }
 }
+
+
+    
