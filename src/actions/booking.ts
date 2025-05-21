@@ -148,6 +148,13 @@ export interface FetchAllAppointmentsResponse {
 }
 
 export async function fetchAllAppointmentsAction(): Promise<FetchAllAppointmentsResponse> {
+    const session = await getUserSession();
+    if (!session?.id || !['admin', 'staff'].includes(session.role)) {
+        console.warn('[fetchAllAppointmentsAction] Unauthorized attempt.');
+        return { success: false, message: "Unauthorized: Admin or Staff privileges required." };
+    }
+    console.log(`[fetchAllAppointmentsAction] User ${session.email} (Role: ${session.role}) fetching all appointments.`);
+
     try {
         const appointmentsCollectionRef = collection(db, 'appointments');
         // Order by date first (descending for recent), then by time (ascending within the date)
@@ -162,8 +169,8 @@ export async function fetchAllAppointmentsAction(): Promise<FetchAllAppointments
                 serviceName: data.serviceName,
                 date: data.date,
                 time: data.time,
-                customerName: data.name, // Note: field in Firestore is 'name' for customer
-                customerEmail: data.email, // Note: field in Firestore is 'email' for customer
+                customerName: data.name, 
+                customerEmail: data.email, 
                 userId: data.userId || null,
                 vehicleMake: data.vehicleMake,
                 vehicleModel: data.vehicleModel || null,
@@ -175,7 +182,7 @@ export async function fetchAllAppointmentsAction(): Promise<FetchAllAppointments
             } as AdminAppointment;
         });
         
-        console.log(`[fetchAllAppointmentsAction] Fetched ${allAppointments.length} appointments for admin view.`);
+        console.log(`[fetchAllAppointmentsAction] Fetched ${allAppointments.length} appointments for admin/staff view.`);
         return { success: true, message: "Appointments fetched successfully.", appointments: allAppointments };
 
     } catch (error: any) {
@@ -199,6 +206,13 @@ export interface UpdateAppointmentStatusResponse {
 }
 
 export async function updateAppointmentStatusAction(data: UpdateAppointmentStatusInput): Promise<UpdateAppointmentStatusResponse> {
+    const session = await getUserSession();
+    if (!session?.id || !['admin', 'staff'].includes(session.role)) {
+        console.warn('[updateAppointmentStatusAction] Unauthorized attempt.');
+        return { success: false, message: "Unauthorized: Admin or Staff privileges required." };
+    }
+    console.log(`[updateAppointmentStatusAction] User ${session.email} (Role: ${session.role}) updating appointment status.`);
+
     try {
         const { appointmentId, newStatus } = data;
         if (!appointmentId || !newStatus) {

@@ -17,7 +17,7 @@ import {
   SidebarInset,
 } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
-import { Home, Calendar, Wrench, MessageSquare, FileText, Users, Settings, Bell, BarChart2, LogOut, Car } from 'lucide-react';
+import { Home, Calendar, Wrench, MessageSquare, FileText, Users, Settings, Bell, BarChart2, LogOut, Car, UserCog } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import type { UserProfile } from '@/actions/auth'; // Import UserProfile type
 
@@ -27,7 +27,7 @@ type UserRole = 'customer' | 'staff' | 'admin';
 const getNavItems = (role: UserRole | undefined) => { // Allow role to be undefined initially
     const commonItems = [
         { href: '/dashboard', label: 'Overview', icon: Home },
-        { href: '/chat', label: 'Chat', icon: MessageSquare },
+        { href: '/chat', label: 'Chat', icon: MessageSquare }, // Common for customer, staff might use /staff/chats
         { href: '/profile', label: 'Profile Settings', icon: Settings },
     ];
 
@@ -39,15 +39,14 @@ const getNavItems = (role: UserRole | undefined) => { // Allow role to be undefi
     ];
 
     const staffItems = [
-        // Example staff routes - adjust as needed
-        { href: '/admin/appointments', label: 'Manage Appointments', icon: Calendar }, // Staff might manage all appointments
-        { href: '/admin/users', label: 'View Users', icon: Users }, // Staff might view users
-        // { href: '/staff/chats', label: 'Customer Chats', icon: MessageSquare }, // Potentially different chat view for staff later
-        { href: '/maintenance/predictive', label: 'Maintenance Alerts', icon: Bell },
+        { href: '/admin/appointments', label: 'Manage Appointments', icon: Calendar },
+        { href: '/admin/users', label: 'View Users', icon: UserCog }, // Changed icon
+        { href: '/staff/chats', label: 'Customer Chats', icon: MessageSquare },
+        { href: '/maintenance/predictive', label: 'Maintenance Alerts', icon: Bell }, // Staff might also want this
     ];
 
      const adminItems = [
-         { href: '/admin/users', label: 'Manage Users', icon: Users },
+         { href: '/admin/users', label: 'Manage Users', icon: UserCog },
          { href: '/admin/appointments', label: 'Manage Appointments', icon: Calendar },
          { href: '/admin/subscriptions', label: 'Manage Subscriptions', icon: FileText },
          { href: '/admin/services', label: 'Manage Services', icon: Wrench },
@@ -61,12 +60,20 @@ const getNavItems = (role: UserRole | undefined) => { // Allow role to be undefi
     switch (role) {
         case 'customer':
             navItems.splice(1, 0, ...customerItems); // Insert customer items after Overview
+            // Remove /chat if it's covered by staff/chats for staff
+            navItems = navItems.filter(item => role === 'customer' || item.href !== '/chat' || item.href === '/chat' && role === 'customer');
             break;
         case 'staff':
              navItems.splice(1, 0, ...staffItems); // Insert staff items after Overview
+             // Staff specific chat link is in staffItems, remove generic /chat if present and not needed.
+             navItems = navItems.filter(item => item.href !== '/chat' || item.href === '/staff/chats');
             break;
         case 'admin':
              navItems.splice(1, 0, ...adminItems); // Insert admin items after Overview
+             // Admins might use /staff/chats or a dedicated admin chat view later. For now, keep their /chat or ensure it points to staff/chats if they use that.
+             // Or if admin uses the global /chat for their own support, it can stay.
+             // If admin should use staff chat:
+             // navItems = navItems.filter(item => item.href !== '/chat' || item.href === '/staff/chats');
             break;
         default:
              console.warn("[ClientLayout] Unknown user role for sidebar:", role);
@@ -88,13 +95,12 @@ export default function DashboardClientLayout({ children, userProfile, logoutAct
     const { toast } = useToast();
     const [isLoggingOut, setIsLoggingOut] = useState(false);
     
-    // Log the received userProfile to debug staff role issue
     useEffect(() => {
         console.log("[ClientLayout] Received userProfile:", userProfile);
     }, [userProfile]);
 
-    const userRole = userProfile?.role; 
-    const navItems = getNavItems(userRole);
+    const role = userProfile?.role; 
+    const navItems = getNavItems(role);
 
 
     const handleLogout = async () => {

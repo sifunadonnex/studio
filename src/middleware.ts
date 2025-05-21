@@ -1,3 +1,4 @@
+
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getUserSession } from '@/actions/auth'; // Import session check
@@ -7,73 +8,69 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // --- Define Protected Routes ---
-  // All routes starting with these paths require authentication
   const protectedPaths = [
     '/dashboard',
-    '/appointments',
-    '/book-appointment', // Require login to book
-    '/chat',
+    '/appointments', // Customer specific
+    '/book-appointment',
+    '/chat', // Customer specific
     '/maintenance',
     '/profile',
-    '/service-history',
-    '/subscriptions/manage',
-    // Add admin/staff specific routes if needed
-    '/admin',
+    '/service-history', // Customer specific
+    '/subscriptions/manage', // Customer specific
+    '/admin', // Generic admin, further checks below
+    '/staff/chats', // Staff specific chat
   ];
 
   const isProtected = protectedPaths.some((path) => pathname.startsWith(path));
 
   // --- Define Public Routes ---
-  // Routes accessible without authentication
   const publicPaths = ['/login', '/register', '/forgot-password', '/', '/services', '/subscriptions', '/contact'];
-  const isPublic = publicPaths.includes(pathname) || pathname.startsWith('/_next') || pathname.startsWith('/api'); // Allow Next.js internals and API routes
+  const isPublic = publicPaths.includes(pathname) || pathname.startsWith('/_next') || pathname.startsWith('/api');
 
-  // --- Logic ---
-  if (isProtected && !session) {
-    // User is trying to access a protected route without being logged in
-    // Redirect them to the login page, preserving the intended destination
-    const loginUrl = new URL('/login', request.url);
-    loginUrl.searchParams.set('redirect', pathname); // Add redirect query param
-    return NextResponse.redirect(loginUrl);
-  }
-
+  // --- Login/Registration for Authenticated Users ---
   if ((pathname === '/login' || pathname === '/register') && session) {
-    // User is trying to access login/register page while already logged in
-    // Redirect them to the dashboard
     return NextResponse.redirect(new URL('/dashboard', request.url));
   }
 
+  // --- Protected Route Access ---
+  if (isProtected && !session) {
+    const loginUrl = new URL('/login', request.url);
+    loginUrl.searchParams.set('redirect', pathname);
+    return NextResponse.redirect(loginUrl);
+  }
 
-    // --- Role-Based Access Control (Example) ---
-    // If you need specific roles for certain paths
-    const adminPaths = ['/admin'];
-    const isAdminPath = adminPaths.some(path => pathname.startsWith(path));
+  // --- Role-Based Access Control ---
+  if (session) { // Only apply role checks if user is logged in
+    if (pathname.startsWith('/admin')) {
+      const allowedAdminPathsForStaff = ['/admin/appointments', '/admin/users'];
+      const isPathAllowedForStaff = allowedAdminPathsForStaff.some(p => pathname.startsWith(p));
 
-    if (isAdminPath && session?.role !== 'admin') {
-        // User is trying to access an admin path without admin role
-        // Redirect to dashboard or an 'unauthorized' page
-        console.warn(`Unauthorized access attempt to ${pathname} by user ${session?.email} (role: ${session?.role})`);
-        return NextResponse.redirect(new URL('/dashboard', request.url)); // Redirect to general dashboard
-         // Or: return NextResponse.redirect(new URL('/unauthorized', request.url));
+      if (session.role === 'staff') {
+        if (!isPathAllowedForStaff) {
+          console.warn(`Staff access denied to ${pathname} for user ${session.email}`);
+          return NextResponse.redirect(new URL('/dashboard', request.url)); // Or an unauthorized page
+        }
+      } else if (session.role === 'customer') {
+        // Customers should not access any /admin paths
+        console.warn(`Customer access denied to ${pathname} for user ${session.email}`);
+        return NextResponse.redirect(new URL('/dashboard', request.url));
+      }
+      // Admins can access all /admin paths (no explicit block needed here for admins)
     }
 
+    // Specific customer routes protection (if a staff/admin tries to access them directly)
+    const customerOnlyPaths = ['/appointments', '/service-history', '/subscriptions/manage'];
+    if (customerOnlyPaths.some(p => pathname.startsWith(p)) && session.role !== 'customer') {
+        console.warn(`Non-customer access denied to ${pathname} for user ${session.email} (role: ${session.role})`);
+        return NextResponse.redirect(new URL('/dashboard', request.url));
+    }
+  }
 
-  // Allow the request to proceed if none of the above conditions are met
   return NextResponse.next();
 }
 
-// --- Matcher ---
-// Define which paths the middleware should run on.
-// Avoid running it on static files or API routes unless necessary.
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - api (API routes)
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     */
     '/((?!api|_next/static|_next/image|favicon.ico).*)',
   ],
 };

@@ -2,7 +2,7 @@
 'use server';
 
 import { z } from 'zod';
-import { getUserSession, UserProfile, setSessionCookie } from '@/actions/auth'; // To verify user and update cookie
+import { getUserSession, UserProfile } from '@/actions/auth'; // To verify user and update cookie
 import { db, auth as firebaseAuthInstance } from '@/lib/firebase/config'; // Firebase db
 import { doc, updateDoc, setDoc, deleteDoc, getDocs, collection, query, where, serverTimestamp, getDoc, Timestamp, orderBy } from 'firebase/firestore';
 import { updatePassword as firebaseUpdatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth'; // For password change
@@ -71,7 +71,7 @@ const serializeVehicleTimestamps = (vehicleData: any): VehicleInput => {
         if (vehicleData.createdAt instanceof Timestamp) {
             serializedData.createdAt = vehicleData.createdAt.toDate().toISOString();
         } else if (typeof vehicleData.createdAt !== 'string') {
-            console.warn(`[serializeVehicleTimestamps] Vehicle ${vehicleId}: 'createdAt' field is present but not a Firestore Timestamp or string. Value:`, vehicleData.createdAt, "Type:", typeof vehicleData.createdAt);
+            // console.warn(`[serializeVehicleTimestamps] Vehicle ${vehicleId}: 'createdAt' field is present but not a Firestore Timestamp or string. Value:`, vehicleData.createdAt, "Type:", typeof vehicleData.createdAt);
         }
     }
 
@@ -79,7 +79,7 @@ const serializeVehicleTimestamps = (vehicleData: any): VehicleInput => {
         if (vehicleData.updatedAt instanceof Timestamp) {
             serializedData.updatedAt = vehicleData.updatedAt.toDate().toISOString();
         } else if (typeof vehicleData.updatedAt !== 'string') {
-            console.warn(`[serializeVehicleTimestamps] Vehicle ${vehicleId}: 'updatedAt' field is present but not a Firestore Timestamp or string. Value:`, vehicleData.updatedAt, "Type:", typeof vehicleData.updatedAt);
+            // console.warn(`[serializeVehicleTimestamps] Vehicle ${vehicleId}: 'updatedAt' field is present but not a Firestore Timestamp or string. Value:`, vehicleData.updatedAt, "Type:", typeof vehicleData.updatedAt);
         }
     }
     return serializedData as VehicleInput;
@@ -112,7 +112,8 @@ export async function updateProfileAction(data: UpdateProfileInput): Promise<Pro
 
         const updatedProfile = await fetchUserProfile(session.id);
         if (updatedProfile) {
-            await setSessionCookie(updatedProfile); 
+            // No need to call setSessionCookie from here; rely on router.refresh() in client component
+            // to re-fetch layout which calls getUserSession, effectively refreshing session state
             return { success: true, message: "Profile updated successfully.", user: updatedProfile };
         } else {
              console.error(`Server Action (updateProfile): Profile updated for ${session.id}, but failed to refetch for session update.`);
@@ -196,7 +197,7 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
             vehicleId = newVehicleDocRef.id;
             await setDoc(newVehicleDocRef, { 
                 ...validatedVehicleData, 
-                id: vehicleId, // Store the generated ID within the document as well
+                id: vehicleId, 
                 createdAt: serverTimestamp(), 
                 updatedAt: serverTimestamp() 
             });
@@ -221,7 +222,7 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
         // Fetch all vehicles again to return the updated list
         const updatedVehiclesSnap = await getDocs(query(vehiclesCollectionRef, orderBy("createdAt", "desc")));
         const updatedVehicles = updatedVehiclesSnap.docs.map(docSnap => 
-            serializeVehicleTimestamps({ id: docSnap.id, ...docSnap.data() }) // Ensure ID from snapshot is used
+            serializeVehicleTimestamps({ id: docSnap.id, ...docSnap.data() }) 
         );
 
         return {
@@ -246,23 +247,22 @@ export async function manageVehicleAction(input: ManageVehicleInput): Promise<Ve
  export async function fetchVehiclesAction(): Promise<VehicleResponse> {
      const session = await getUserSession();
      if (!session?.id) {
-        console.warn('[fetchVehiclesAction] No session or session ID found. User must be logged in.');
+        // console.warn('[fetchVehiclesAction] No session or session ID found. User must be logged in.');
         return { success: false, message: "Authentication required to fetch vehicles." };
      }
      const userId = session.id;
-     console.log(`[fetchVehiclesAction] Fetching vehicles for user ${userId}`);
+     // console.log(`[fetchVehiclesAction] Fetching vehicles for user ${userId}`);
 
      try {
          const vehiclesCollectionRef = collection(db, 'users', userId, 'vehicles');
          const q = query(vehiclesCollectionRef, orderBy("createdAt", "desc"));
-         console.log(`[fetchVehiclesAction] Executing Firestore query for user ${userId}'s vehicles.`);
+         // console.log(`[fetchVehiclesAction] Executing Firestore query for user ${userId}'s vehicles.`);
          
          const vehiclesSnap = await getDocs(q);
-         console.log(`[fetchVehiclesAction] Found ${vehiclesSnap.docs.length} vehicles for user ${userId}.`);
+         // console.log(`[fetchVehiclesAction] Found ${vehiclesSnap.docs.length} vehicles for user ${userId}.`);
          
          const vehicles = vehiclesSnap.docs.map(docSnap => {
             const data = docSnap.data();
-            // console.log(`[fetchVehiclesAction] Raw data for vehicle ${docSnap.id}:`, data); // Log raw data for debugging
             return serializeVehicleTimestamps({ id: docSnap.id, ...data });
          });
 
@@ -313,17 +313,17 @@ export async function fetchUserProfile(userId: string): Promise<UserProfile | nu
 }
 
 /**
- * Fetches all user profiles from Firestore for admin purposes.
- * Serializes Timestamps. Requires admin privileges.
+ * Fetches all user profiles from Firestore for admin/staff purposes.
+ * Serializes Timestamps. Requires admin or staff privileges.
  */
 export async function fetchAllUsersAction(): Promise<AllUsersResponse> {
     const session = await getUserSession();
-    if (!session?.id || session.role !== 'admin') {
+    if (!session?.id || !['admin', 'staff'].includes(session.role)) {
         console.warn('[fetchAllUsersAction] Unauthorized attempt to fetch all users.');
-        return { success: false, message: "Unauthorized: Admin privileges required." };
+        return { success: false, message: "Unauthorized: Admin or Staff privileges required." };
     }
 
-    console.log(`[fetchAllUsersAction] Admin ${session.id} fetching all users.`);
+    console.log(`[fetchAllUsersAction] User ${session.email} (Role: ${session.role}) fetching all users.`);
     try {
         const usersCollectionRef = collection(db, 'users');
         const q = query(usersCollectionRef, orderBy("name", "asc")); 
@@ -360,11 +360,13 @@ export async function fetchAllUsersAction(): Promise<AllUsersResponse> {
 
 /**
  * Updates a user's profile details (name, role, phone) by an admin.
+ * Email cannot be changed.
  */
 export async function updateUserByAdminAction(data: UpdateUserByAdminInput): Promise<ProfileResponse> {
     const session = await getUserSession();
+    // Only admins can change roles or details of other users.
     if (!session?.id || session.role !== 'admin') {
-        return { success: false, message: "Unauthorized: Admin privileges required." };
+        return { success: false, message: "Unauthorized: Admin privileges required to update user details." };
     }
 
     try {
@@ -373,23 +375,23 @@ export async function updateUserByAdminAction(data: UpdateUserByAdminInput): Pro
 
         const userDocRef = doc(db, 'users', validatedData.userId);
         
-        // Check if user exists before attempting update
         const userDocSnap = await getDoc(userDocRef);
         if (!userDocSnap.exists()) {
             return { success: false, message: `User with ID ${validatedData.userId} not found.` };
         }
 
-        await updateDoc(userDocRef, {
+        // Prepare data for update, excluding email
+        const updatePayload: {name: string, role: 'customer' | 'staff' | 'admin', phone: string | null, updatedAt: any} = {
             name: validatedData.name,
             role: validatedData.role,
-            phone: validatedData.phone === undefined ? null : validatedData.phone, // Ensure phone is null if not provided, not undefined
+            phone: validatedData.phone === undefined ? null : (validatedData.phone || null),
             updatedAt: serverTimestamp(),
-        });
+        };
 
-        // Optionally, re-fetch the specific user's profile to return it if needed by the client
-        // const updatedUser = await fetchUserProfile(validatedData.userId);
 
-        return { success: true, message: `User ${validatedData.name} updated successfully.` /*, user: updatedUser */ };
+        await updateDoc(userDocRef, updatePayload);
+
+        return { success: true, message: `User ${validatedData.name} updated successfully.` };
 
     } catch (error: any) {
         if (error instanceof z.ZodError) {
@@ -403,4 +405,3 @@ export async function updateUserByAdminAction(data: UpdateUserByAdminInput): Pro
         return { success: false, message: 'An unexpected error occurred while updating user.' };
     }
 }
-
