@@ -4,7 +4,7 @@
 import { z } from 'zod';
 import { getUserSession, UserProfile } from '@/actions/auth'; // To get logged-in user ID and profile type
 import { db } from '@/lib/firebase/config'; // Firebase db
-import { collection, addDoc, serverTimestamp, doc, getDoc } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, doc, getDoc, getDocs, query, orderBy, updateDoc, Timestamp } from 'firebase/firestore';
 import { fetchUserProfile } from './profile'; // To fetch user profile details
 
 // --- Input Schema ---
@@ -24,12 +24,14 @@ const BookAppointmentSchema = z.object({
     additionalInfo: z.string().nullable().optional(),
 }).refine(data => data.userId || (data.customerName && data.customerEmail && data.customerPhone), {
     message: "Name, Email, and Phone are required for guest bookings.",
-    path: ["customerName"], 
+    path: ["customerName"],
 });
 
 
 // --- Type ---
 export type BookAppointmentInput = z.infer<typeof BookAppointmentSchema>;
+export type AppointmentStatus = 'Pending' | 'Confirmed' | 'Completed' | 'Cancelled';
+
 
 export interface BookingResponse {
   success: boolean;
@@ -90,7 +92,7 @@ export async function bookAppointmentAction(data: BookAppointmentInput): Promise
             vehicleModel: validatedData.vehicleModel || null,
             vehicleYear: validatedData.vehicleYear || null,
             additionalInfo: validatedData.additionalInfo || null,
-            status: 'Pending', // Initial status
+            status: 'Pending' as AppointmentStatus, // Initial status
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
         };
@@ -98,10 +100,8 @@ export async function bookAppointmentAction(data: BookAppointmentInput): Promise
         // Add to 'appointments' collection in Firestore
         const appointmentsCollectionRef = collection(db, 'appointments');
         const docRef = await addDoc(appointmentsCollectionRef, appointmentData);
-        
-        console.log('Server Action: Booking successful. Firestore Appointment ID:', docRef.id);
 
-        // TODO: Trigger confirmation email/SMS (e.g., via a Firebase Function or third-party service)
+        console.log('Server Action: Booking successful. Firestore Appointment ID:', docRef.id);
 
         return {
             success: true,
@@ -117,5 +117,105 @@ export async function bookAppointmentAction(data: BookAppointmentInput): Promise
         }
         console.error('Server Action Error (bookAppointmentAction Firestore):', error);
         return { success: false, message: 'An unexpected error occurred while booking.' };
+    }
+}
+
+
+// --- Admin Appointment Actions ---
+
+export interface AdminAppointment {
+  id: string;
+  serviceId: string;
+  serviceName: string;
+  date: string;
+  time: string;
+  customerName: string;
+  customerEmail: string;
+  userId?: string | null;
+  vehicleMake: string;
+  vehicleModel?: string | null;
+  vehicleYear?: string | null;
+  additionalInfo?: string | null;
+  status: AppointmentStatus;
+  createdAt: string; // Serialized Timestamp
+  updatedAt: string; // Serialized Timestamp
+}
+
+export interface FetchAllAppointmentsResponse {
+  success: boolean;
+  message: string;
+  appointments?: AdminAppointment[];
+}
+
+export async function fetchAllAppointmentsAction(): Promise<FetchAllAppointmentsResponse> {
+    try {
+        const appointmentsCollectionRef = collection(db, 'appointments');
+        // Order by date first (descending for recent), then by time (ascending within the date)
+        const q = query(appointmentsCollectionRef, orderBy("date", "desc"), orderBy("time", "asc"));
+        const querySnapshot = await getDocs(q);
+
+        const allAppointments = querySnapshot.docs.map(docSnap => {
+            const data = docSnap.data();
+            return {
+                id: docSnap.id,
+                serviceId: data.serviceId,
+                serviceName: data.serviceName,
+                date: data.date,
+                time: data.time,
+                customerName: data.name, // Note: field in Firestore is 'name' for customer
+                customerEmail: data.email, // Note: field in Firestore is 'email' for customer
+                userId: data.userId || null,
+                vehicleMake: data.vehicleMake,
+                vehicleModel: data.vehicleModel || null,
+                vehicleYear: data.vehicleYear || null,
+                additionalInfo: data.additionalInfo || null,
+                status: data.status as AppointmentStatus,
+                createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate().toISOString() : (data.createdAt || new Date(0).toISOString()),
+                updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toDate().toISOString() : (data.updatedAt || new Date(0).toISOString()),
+            } as AdminAppointment;
+        });
+        
+        console.log(`[fetchAllAppointmentsAction] Fetched ${allAppointments.length} appointments for admin view.`);
+        return { success: true, message: "Appointments fetched successfully.", appointments: allAppointments };
+
+    } catch (error: any) {
+        console.error('[fetchAllAppointmentsAction] Error fetching all appointments:', error);
+        let detailedMessage = 'An unexpected error occurred while fetching appointments.';
+         if (error.code && error.message) {
+            detailedMessage = `Error fetching appointments: ${error.message} (Code: ${error.code}). Check server logs for details, including any links to create Firestore indexes if needed.`;
+            console.error(`[fetchAllAppointmentsAction] Firebase Error Code: ${error.code}, Message: ${error.message}`);
+         }
+        return { success: false, message: detailedMessage, appointments: [] };
+    }
+}
+
+export interface UpdateAppointmentStatusInput {
+    appointmentId: string;
+    newStatus: AppointmentStatus;
+}
+export interface UpdateAppointmentStatusResponse {
+    success: boolean;
+    message: string;
+}
+
+export async function updateAppointmentStatusAction(data: UpdateAppointmentStatusInput): Promise<UpdateAppointmentStatusResponse> {
+    try {
+        const { appointmentId, newStatus } = data;
+        if (!appointmentId || !newStatus) {
+            return { success: false, message: "Appointment ID and new status are required." };
+        }
+
+        const appointmentDocRef = doc(db, "appointments", appointmentId);
+        await updateDoc(appointmentDocRef, {
+            status: newStatus,
+            updatedAt: serverTimestamp(),
+        });
+
+        console.log(`[updateAppointmentStatusAction] Updated status for appointment ${appointmentId} to ${newStatus}`);
+        return { success: true, message: `Appointment status updated to ${newStatus}.` };
+
+    } catch (error: any) {
+        console.error('[updateAppointmentStatusAction] Error updating appointment status:', error);
+        return { success: false, message: 'An unexpected error occurred while updating status.' };
     }
 }
